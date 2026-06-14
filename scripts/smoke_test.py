@@ -163,7 +163,7 @@ def main() -> int:
         login = client.post("/login", {"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD})
         require(login, "Inventory")
         require(login, "SS-31")
-        require(login, "2 mg")
+        require(login, "tracked peptides")
 
         inventory = client.get("/inventory")
         require(inventory, "Add inventory")
@@ -183,11 +183,38 @@ def main() -> int:
             },
         )
         home = client.get("/")
-        require(home, "28 mg remaining")
+        require(home, "30 mg on hand")
         require(home, "Vials on hand")
-        require(home, "2.8")
-        require(home, "Used MG")
+        require(home, "3")
+        require(home, "Vials used")
+        require(home, "0 forecast dose logs")
+        require(home, "Logged MG")
         require(home, "Total MG")
+
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO dose_logs
+                  (user_id, source, peptide_name, actual_dose_amount, dose_unit, status, site, notes, logged_at)
+                VALUES (1, 'manual', 'SS-31', 1.0, 'mg', 'completed', '', '', '2999-01-01T08:00:00')
+                """
+            )
+        home = client.get("/")
+        require(home, "30 mg on hand")
+        require(home, "1 forecast dose logs")
+        require(home, "1 mg")
+
+        with sqlite3.connect(db_path) as conn:
+            lot_id = conn.execute("SELECT id FROM inventory_lots WHERE peptide_name = 'SS-31' ORDER BY id DESC LIMIT 1").fetchone()[0]
+        client.post("/lots/use", {"lot_id": str(lot_id)})
+        home = client.get("/")
+        require(home, "20 mg on hand")
+        require(home, "2")
+        require(home, "Vials used")
+
+        client.post("/lots/restore", {"lot_id": str(lot_id)})
+        home = client.get("/")
+        require(home, "30 mg on hand")
 
         client.post(
             "/lots",

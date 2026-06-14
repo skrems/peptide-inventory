@@ -87,6 +87,7 @@ def init_db() -> None:
               peptide_name TEXT NOT NULL,
               vial_count REAL NOT NULL,
               mg_per_vial REAL NOT NULL,
+              vials_used REAL NOT NULL DEFAULT 0,
               added_at TEXT NOT NULL,
               notes TEXT,
               created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -104,6 +105,9 @@ def init_db() -> None:
             );
             """
         )
+        columns = {row["name"] for row in query(conn, "PRAGMA table_info(inventory_lots)")}
+        if "vials_used" not in columns:
+            conn.execute("ALTER TABLE inventory_lots ADD COLUMN vials_used REAL NOT NULL DEFAULT 0")
 
 
 def query(conn: sqlite3.Connection, sql: str, args: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
@@ -178,21 +182,52 @@ def ensure_peptide(conn: sqlite3.Connection, name: str, notes: str = "") -> None
 def inventory_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     peptides = [row["name"] for row in peptide_catalog(conn)]
     lot_names = [row["peptide_name"] for row in query(conn, "SELECT DISTINCT peptide_name FROM inventory_lots")]
-    log_names = [row["peptide_name"] for row in query(conn, "SELECT DISTINCT peptide_name FROM dose_logs")]
     adj_names = [row["peptide_name"] for row in query(conn, "SELECT DISTINCT peptide_name FROM inventory_adjustments")]
-    names = sorted({*peptides, *lot_names, *log_names, *adj_names}, key=str.lower)
+    names = sorted({*peptides, *lot_names, *adj_names}, key=str.lower)
     rows: list[dict[str, Any]] = []
     for name in names:
         lot = one(
             conn,
-            "SELECT COALESCE(SUM(vial_count * mg_per_vial), 0) total_mg, COALESCE(SUM(vial_count), 0) vials FROM inventory_lots WHERE peptide_name = ?",
+            """
+            SELECT
+              COALESCE(SUM(vial_count * mg_per_vial), 0) total_added_mg,
+              COALESCE(SUM(CASE WHEN vial_count > COALESCE(vials_used, 0) THEN (vial_count - COALESCE(vials_used, 0)) * mg_per_vial ELSE 0 END), 0) on_hand_mg,
+              COALESCE(SUM(vial_count), 0) vials,
+              COALESCE(SUM(COALESCE(vials_used, 0)), 0) vials_used,
+              COALESCE(SUM(CASE WHEN vial_count > COALESCE(vials_used, 0) THEN vial_count - COALESCE(vials_used, 0) ELSE 0 END), 0) vials_on_hand
+            FROM inventory_lots
+            WHERE peptide_name = ?
+            """,
             (name,),
         )
-        used = one(
+        baseline = one(
             conn,
-            "SELECT COALESCE(SUM(actual_dose_amount), 0) used_mg, COUNT(*) logs FROM dose_logs WHERE peptide_name = ? AND status = 'completed' AND dose_unit = 'mg'",
-            (name,),
+            """
+            SELECT MIN(created_at) inventory_started_at
+            FROM (
+              SELECT created_at FROM inventory_lots WHERE peptide_name = ?
+              UNION ALL
+              SELECT created_at FROM inventory_adjustments WHERE peptide_name = ?
+            )
+            """,
+            (name, name),
         )
+        inventory_started_at = baseline["inventory_started_at"] if baseline else None
+        if inventory_started_at:
+            logged = one(
+                conn,
+                """
+                SELECT COALESCE(SUM(actual_dose_amount), 0) logged_mg, COUNT(*) logs
+                FROM dose_logs
+                WHERE peptide_name = ?
+                  AND status = 'completed'
+                  AND dose_unit = 'mg'
+                  AND logged_at >= ?
+                """,
+                (name, inventory_started_at),
+            )
+        else:
+            logged = {"logged_mg": 0, "logs": 0}
         adjustments = one(
             conn,
             "SELECT COALESCE(SUM(amount_mg), 0) amount_mg FROM inventory_adjustments WHERE peptide_name = ?",
@@ -203,23 +238,34 @@ def inventory_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             "SELECT mg_per_vial FROM inventory_lots WHERE peptide_name = ? ORDER BY added_at DESC, id DESC LIMIT 1",
             (name,),
         )
-        total_mg = float(lot["total_mg"] or 0)
-        used_mg = float(used["used_mg"] or 0)
+        total_added_mg = float(lot["total_added_mg"] or 0)
+        on_hand_mg = float(lot["on_hand_mg"] or 0)
+        logged_mg = float(logged["logged_mg"] or 0)
         adjustment_mg = float(adjustments["amount_mg"] or 0)
-        remaining_mg = total_mg + adjustment_mg - used_mg
+        remaining_mg = on_hand_mg + adjustment_mg
         mg_per_vial = float(latest_lot["mg_per_vial"]) if latest_lot else 0.0
-        remaining_vials = max(remaining_mg / mg_per_vial, 0) if mg_per_vial > 0 else 0.0
+        remaining_vials = float(lot["vials_on_hand"] or 0)
+        projected_days = None
+        if inventory_started_at and logged_mg > 0 and remaining_mg > 0:
+            started_at = datetime.fromisoformat(inventory_started_at)
+            elapsed_days = max((datetime.now(app_timezone()).replace(tzinfo=None) - started_at).total_seconds() / 86400, 1)
+            daily_logged_mg = logged_mg / elapsed_days
+            projected_days = remaining_mg / daily_logged_mg if daily_logged_mg > 0 else None
         rows.append(
             {
                 "name": name,
-                "total_mg": total_mg,
-                "used_mg": used_mg,
+                "total_mg": remaining_mg,
+                "total_added_mg": total_added_mg,
+                "logged_mg": logged_mg,
                 "adjustment_mg": adjustment_mg,
                 "remaining_mg": remaining_mg,
                 "vials_added": float(lot["vials"] or 0),
-                "dose_logs": int(used["logs"] or 0),
+                "vials_used": float(lot["vials_used"] or 0),
+                "dose_logs": int(logged["logs"] or 0),
                 "mg_per_vial": mg_per_vial,
                 "remaining_vials": remaining_vials,
+                "projected_days": projected_days,
+                "inventory_started_at": inventory_started_at,
             }
         )
     return rows
@@ -340,16 +386,18 @@ def render_home(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
     rows = inventory_rows(conn)
     total_remaining = sum(row["remaining_mg"] for row in rows)
     low_count = sum(1 for row in rows if row["remaining_mg"] <= 0)
+    forecast_text = lambda row: f" · ~{fmt_num(row['projected_days'])} days at logged pace" if row["projected_days"] else ""
     cards = "".join(
         f"""
         <article class="item">
           <div class="inventory-row">
             <div class="inventory-peptide">
               <h3>{h(row['name'])}</h3>
-              <p class="meta">{fmt_mg(row['remaining_mg'])} remaining · {row['dose_logs']} dose logs</p>
+              <p class="meta">{fmt_mg(row['remaining_mg'])} on hand · {row['dose_logs']} forecast dose logs{forecast_text(row)}</p>
             </div>
             <div class="metric"><span>Vials on hand</span><strong>{fmt_num(row['remaining_vials'])}</strong></div>
-            <div class="metric"><span>Used MG</span><strong>{fmt_mg(row['used_mg'])}</strong></div>
+            <div class="metric"><span>Vials used</span><strong>{fmt_num(row['vials_used'])}</strong></div>
+            <div class="metric"><span>Logged MG</span><strong>{fmt_mg(row['logged_mg'])}</strong></div>
             <div class="metric"><span>Adjusted MG</span><strong>{fmt_mg(row['adjustment_mg'])}</strong></div>
             <div class="metric"><span>Total MG</span><strong>{fmt_mg(row['total_mg'])}</strong></div>
           </div>
@@ -362,7 +410,7 @@ def render_home(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
       <div>
         <p class="eyebrow">At a glance</p>
         <h2>{len(rows)} tracked peptides</h2>
-        <p class="meta">{fmt_mg(total_remaining)} total remaining across shared inventory. {low_count} peptides are at or below zero.</p>
+        <p class="meta">{fmt_mg(total_remaining)} physical stock on hand. Dose logs are used only for forecasting. {low_count} peptides are at or below zero.</p>
       </div>
       <a class="button" href="/inventory">Manage inventory</a>
     </section>
@@ -375,19 +423,38 @@ def render_home(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
 
 
 def render_inventory(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
-    lots = query(conn, "SELECT * FROM inventory_lots ORDER BY added_at DESC, id DESC LIMIT 100")
+    lots = query(
+        conn,
+        """
+        SELECT *,
+          CASE WHEN vial_count > COALESCE(vials_used, 0) THEN vial_count - COALESCE(vials_used, 0) ELSE 0 END AS vials_available
+        FROM inventory_lots
+        ORDER BY added_at DESC, id DESC
+        LIMIT 100
+        """,
+    )
     adjustments = query(conn, "SELECT * FROM inventory_adjustments ORDER BY created_at DESC, id DESC LIMIT 100")
     lot_html = "".join(
         f"""
         <article class="item">
           <div class="item-title">
-            <div><h3>{h(row['peptide_name'])}</h3><p class="meta">{fmt_num(row['vial_count'])} vials · {fmt_num(row['mg_per_vial'])} mg/vial · added {h(row['added_at'])}</p></div>
+            <div><h3>{h(row['peptide_name'])}</h3><p class="meta">{fmt_num(row['vials_available'])} of {fmt_num(row['vial_count'])} vials on hand · {fmt_num(row['mg_per_vial'])} mg/vial · added {h(row['added_at'])}</p></div>
           </div>
           <p class="meta">{h(row['notes'])}</p>
-          <form method="post" action="/lots/delete" onsubmit="return confirm('Delete this inventory lot?');">
-            <input type="hidden" name="lot_id" value="{row['id']}">
-            <button class="danger" type="submit">Delete lot</button>
-          </form>
+          <div class="button-row">
+            <form method="post" action="/lots/use" onsubmit="return confirm('Mark one vial from this lot as used/reconstituted?');">
+              <input type="hidden" name="lot_id" value="{row['id']}">
+              <button class="secondary" type="submit">Mark 1 vial used</button>
+            </form>
+            <form method="post" action="/lots/restore">
+              <input type="hidden" name="lot_id" value="{row['id']}">
+              <button class="secondary" type="submit">Restore 1 vial</button>
+            </form>
+            <form method="post" action="/lots/delete" onsubmit="return confirm('Delete this inventory lot?');">
+              <input type="hidden" name="lot_id" value="{row['id']}">
+              <button class="danger" type="submit">Delete lot</button>
+            </form>
+          </div>
         </article>
         """
         for row in lots
@@ -513,6 +580,12 @@ class App(BaseHTTPRequestHandler):
             if parsed.path == "/lots":
                 self.add_lot(conn, ctx.user["id"], data)
                 return self.redirect(with_flash("/inventory", "Inventory added"))
+            if parsed.path == "/lots/use":
+                self.mark_lot_vial(conn, int(data["lot_id"]), 1)
+                return self.redirect(with_flash("/inventory", "Vial marked used"))
+            if parsed.path == "/lots/restore":
+                self.mark_lot_vial(conn, int(data["lot_id"]), -1)
+                return self.redirect(with_flash("/inventory", "Vial restored"))
             if parsed.path == "/lots/delete":
                 conn.execute("DELETE FROM inventory_lots WHERE id = ?", (int(data["lot_id"]),))
                 return self.redirect(with_flash("/inventory", "Inventory lot deleted"))
@@ -606,6 +679,19 @@ class App(BaseHTTPRequestHandler):
             """,
             (peptide_name, amount_mg, reason, data.get("notes", "").strip(), user_id, now_iso()),
         )
+
+    def mark_lot_vial(self, conn: sqlite3.Connection, lot_id: int, delta: int) -> None:
+        lot = one(conn, "SELECT id, vial_count, COALESCE(vials_used, 0) AS vials_used FROM inventory_lots WHERE id = ?", (lot_id,))
+        if not lot:
+            raise ValueError("Inventory lot not found.")
+        vial_count = float(lot["vial_count"])
+        vials_used = float(lot["vials_used"])
+        next_used = vials_used + delta
+        if next_used < 0:
+            raise ValueError("No used vials to restore for this lot.")
+        if next_used > vial_count:
+            raise ValueError("All vials in this lot are already marked used.")
+        conn.execute("UPDATE inventory_lots SET vials_used = ? WHERE id = ?", (next_used, lot_id))
 
     def serve_static(self, path: Path) -> None:
         resolved = path.resolve()

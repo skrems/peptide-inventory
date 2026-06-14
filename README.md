@@ -12,7 +12,9 @@ This app uses the same SQLite database as Peptide Power Assistant. It reads shar
 - Add inventory by supplier code, such as `SK10` for Selank 10 mg.
 - Add a new peptide while adding inventory.
 - New peptides are inserted into the shared `peptides` table so they appear in Peptide Power Assistant dropdowns.
-- Usage is calculated from all users' completed `dose_logs` in mg.
+- Mark individual vials as used/reconstituted when they leave physical stock.
+- Peptide Power dose logs are used for runway/reorder forecasting only; they do not automatically deplete inventory.
+- Existing historical dose logs are ignored when you first enter current stock, so the lot count you enter becomes the starting inventory.
 - Manual inventory adjustments for waste, corrections, or found stock.
 - ZimaOS deployment on port `8081`.
 
@@ -72,7 +74,7 @@ http://127.0.0.1:8081
 make smoke
 ```
 
-The smoke test creates a throwaway SQLite database with Peptide Power-compatible `users`, `peptides`, and `dose_logs`, then verifies inventory calculations and admin-only access.
+The smoke test creates a throwaway SQLite database with Peptide Power-compatible `users`, `peptides`, and `dose_logs`, then verifies baseline inventory calculations, vial-use depletion, forecasting-only dose logs, and admin-only access.
 
 ## ZimaOS Deployment
 
