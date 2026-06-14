@@ -8,7 +8,7 @@ Peptide Inventory is a standalone admin-only companion app for Peptide Power Ass
 
 ## Current Decisions
 
-- Project path: `/Users/skrems/Projects/peptide-inventory`
+- Local project path: clone this repository wherever you keep local projects.
 - ZimaOS port: `8081`
 - Access: admin-only
 - Shared database path on ZimaOS: `/DATA/AppData/peptide-power-assistant/data/app.db`
@@ -63,4 +63,4 @@ Container port: 8081
 Volume: /DATA/AppData/peptide-power-assistant/data -> /data
 ```
 
-Follow `/Users/skrems/Projects/ZIMAOS_RUNBOOK.md` for release and update flow.
+Follow the shared ZimaOS runbook for release and update flow.

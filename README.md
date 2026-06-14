@@ -38,11 +38,7 @@ inventory_adjustments
 
 ## Supplier Codes
 
-The Add Inventory form includes WanShun supplier code lookup from:
-
-```text
-/Users/skrems/Documents/Peptides/Peptide Suplier (WanShun).pdf
-```
+The Add Inventory form includes a checked-in WanShun supplier code lookup generated from the supplier PDF kept outside this repository.
 
 Examples:
 
@@ -138,5 +134,5 @@ Volume: /DATA/AppData/peptide-power-assistant/data -> /data
 ## Notes
 
 - Inventory is shared household/main inventory, not per-user inventory.
-- Dose usage only counts completed logs with `dose_unit = 'mg'`.
+- Dose logs are forecasting inputs only; inventory is depleted by marking physical vials as used.
 - A future version can add reorder thresholds, lead time projections, and optional daily snapshots.
