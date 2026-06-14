@@ -184,7 +184,8 @@ def main() -> int:
         )
         home = client.get("/")
         require(home, "28 mg remaining")
-        require(home, "2.8 estimated vials")
+        require(home, "2.8 vials estimated")
+        require(home, "Total MG")
 
         client.post(
             "/lots",

@@ -345,15 +345,15 @@ def render_home(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
           <div class="item-title">
             <div>
               <h3>{h(row['name'])}</h3>
-              <p class="meta">{fmt_mg(row['remaining_mg'])} remaining · {fmt_num(row['estimated_vials'])} estimated vials</p>
+              <p class="meta">{fmt_mg(row['remaining_mg'])} remaining · {fmt_num(row['estimated_vials'])} vials estimated</p>
             </div>
             <span class="badge {'red' if row['remaining_mg'] <= 0 else ''}">{row['dose_logs']} dose logs</span>
           </div>
           <div class="grid four compact-metrics">
-            <div><span>Added</span><strong>{fmt_mg(row['total_mg'])}</strong></div>
+            <div><span>Vials</span><strong>{fmt_num(row['estimated_vials'])}</strong></div>
             <div><span>Used</span><strong>{fmt_mg(row['used_mg'])}</strong></div>
             <div><span>Adjusted</span><strong>{fmt_mg(row['adjustment_mg'])}</strong></div>
-            <div><span>Latest vial</span><strong>{fmt_num(row['mg_per_vial'])} mg</strong></div>
+            <div><span>Total MG</span><strong>{fmt_mg(row['total_mg'])}</strong></div>
           </div>
         </article>
         """
