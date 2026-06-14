@@ -12,7 +12,7 @@ Peptide Inventory is a standalone admin-only companion app for Peptide Power Ass
 - ZimaOS port: `8081`
 - Access: admin-only
 - Shared database path on ZimaOS: `/DATA/AppData/peptide-power-assistant/data/app.db`
-- Inventory app image: `ghcr.io/skrems/peptide-inventory:v0.1`
+- Inventory app image: `ghcr.io/skrems/peptide-inventory:v1.1`
 
 ## Shared Tables
 
@@ -40,6 +40,7 @@ inventory_adjustments
 - Inventory is a physical vial ledger. Dose logs do not automatically deplete inventory.
 - Marking a vial as used/reconstituted removes one vial from stock.
 - Peptide Power dose logs are used for runway/reorder forecasting after inventory tracking starts for that peptide.
+- Dashboard supply-health bars classify peptides as critical, low, healthy, or no-pace based on projected days remaining.
 - The first inventory lot or adjustment establishes the starting point. Historical dose logs before that point are ignored, because production stock entry represents current on-hand inventory.
 - Inventory is calculated live; no 3am job is needed for MVP.
 
@@ -56,7 +57,7 @@ This app should be imported into ZimaOS as a separate app:
 
 ```text
 Docker image: ghcr.io/skrems/peptide-inventory
-Tag: v0.1
+Tag: v1.1
 Host port: 8081
 Container port: 8081
 Volume: /DATA/AppData/peptide-power-assistant/data -> /data

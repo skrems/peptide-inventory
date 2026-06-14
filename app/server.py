@@ -10,7 +10,7 @@ import sqlite3
 import sys
 import urllib.parse
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from html import escape
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -22,7 +22,7 @@ from app.supplier_codes import SUPPLIER_CODES, supplier_lookup
 
 
 APP_NAME = "Peptide Inventory"
-APP_VERSION = "v0.1"
+APP_VERSION = "v1.1"
 ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = ROOT / "static"
 DB_PATH = Path(os.environ.get("INVENTORY_DB", ROOT / "data" / "app.db"))
@@ -281,6 +281,54 @@ def fmt_num(value: float | None) -> str:
     return f"{value:,.2f}".rstrip("0").rstrip(".")
 
 
+def health_state(row: dict[str, Any]) -> str:
+    if row["remaining_mg"] <= 0:
+        return "critical"
+    if row["projected_days"] is None:
+        return "unknown"
+    if row["projected_days"] < 21:
+        return "critical"
+    if row["projected_days"] < 45:
+        return "low"
+    return "healthy"
+
+
+def health_label(state: str) -> str:
+    return {
+        "healthy": "Healthy",
+        "low": "Low",
+        "critical": "Critical",
+        "unknown": "No pace yet",
+    }[state]
+
+
+def runway_bar_width(row: dict[str, Any]) -> int:
+    if row["remaining_mg"] <= 0:
+        return 100
+    if row["projected_days"] is None:
+        return 8
+    return max(8, min(100, round((row["projected_days"] / 90) * 100)))
+
+
+def runway_text(row: dict[str, Any]) -> str:
+    if row["remaining_mg"] <= 0:
+        return "Out of stock"
+    if row["projected_days"] is None:
+        return "No usage pace yet"
+    return f"~{fmt_num(row['projected_days'])} days left"
+
+
+def order_by_text(row: dict[str, Any]) -> str:
+    if row["remaining_mg"] <= 0:
+        return "Order now"
+    if row["projected_days"] is None:
+        return "Watch stock"
+    order_date = datetime.now(app_timezone()).date() + timedelta(days=max(row["projected_days"] - 14, 0))
+    if row["projected_days"] <= 14:
+        return "Order now"
+    return order_date.strftime("%b %-d")
+
+
 def peptide_options(conn: sqlite3.Connection, selected: str = "") -> str:
     options = []
     for row in peptide_catalog(conn):
@@ -385,11 +433,11 @@ def login_page(error: str | None = None) -> bytes:
 def render_home(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
     rows = inventory_rows(conn)
     total_remaining = sum(row["remaining_mg"] for row in rows)
-    low_count = sum(1 for row in rows if row["remaining_mg"] <= 0)
+    states = {state: sum(1 for row in rows if health_state(row) == state) for state in ("critical", "low", "healthy", "unknown")}
     forecast_text = lambda row: f" · ~{fmt_num(row['projected_days'])} days at logged pace" if row["projected_days"] else ""
     cards = "".join(
         f"""
-        <article class="item">
+        <article class="item inventory-card {health_state(row)}">
           <div class="inventory-row">
             <div class="inventory-peptide">
               <h3>{h(row['name'])}</h3>
@@ -401,16 +449,31 @@ def render_home(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
             <div class="metric"><span>Adjusted MG</span><strong>{fmt_mg(row['adjustment_mg'])}</strong></div>
             <div class="metric"><span>Total MG</span><strong>{fmt_mg(row['total_mg'])}</strong></div>
           </div>
+          <div class="runway">
+            <div class="runway-head">
+              <span class="badge {health_state(row)}">{health_label(health_state(row))}</span>
+              <strong>{runway_text(row)}</strong>
+              <span>Order by: {order_by_text(row)}</span>
+            </div>
+            <div class="runway-track" aria-label="{h(row['name'])} inventory runway">
+              <span class="runway-fill {health_state(row)}" style="width: {runway_bar_width(row)}%;"></span>
+            </div>
+          </div>
         </article>
         """
         for row in rows
     ) or '<div class="empty">No peptides or inventory yet.</div>'
+    summary = "".join(
+        f'<span class="health-pill {state}">{count} {health_label(state).lower()}</span>'
+        for state, count in states.items()
+    )
     body = f"""
     <section class="panel hero-panel">
       <div>
         <p class="eyebrow">At a glance</p>
         <h2>{len(rows)} tracked peptides</h2>
-        <p class="meta">{fmt_mg(total_remaining)} physical stock on hand. Dose logs are used only for forecasting. {low_count} peptides are at or below zero.</p>
+        <p class="meta">{fmt_mg(total_remaining)} physical stock on hand. Dose logs are used only for forecasting.</p>
+        <div class="health-summary">{summary}</div>
       </div>
       <a class="button" href="/inventory">Manage inventory</a>
     </section>
