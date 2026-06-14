@@ -1,0 +1,16 @@
+services:
+  peptide-inventory:
+    build: .
+    container_name: peptide-inventory
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      INVENTORY_HOST: "0.0.0.0"
+      INVENTORY_PORT: "8081"
+      INVENTORY_DB: "/data/app.db"
+      INVENTORY_SECRET: "change-me-for-local-dev"
+      INVENTORY_TIMEZONE: "America/Los_Angeles"
+      TZ: "America/Los_Angeles"
+    volumes:
+      - ./data:/data

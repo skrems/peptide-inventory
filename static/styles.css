@@ -1,0 +1,295 @@
+:root {
+  --bg: #f5f7fb;
+  --panel: #ffffff;
+  --ink: #17202a;
+  --muted: #65717d;
+  --line: #d7dee8;
+  --accent: #315f94;
+  --accent-dark: #24496f;
+  --red: #b3261e;
+  --red-bg: #fde8e5;
+  --warn: #8a5a00;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body.auth {
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.app-shell {
+  max-width: 1040px;
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 18px;
+}
+
+.topbar,
+.panel-head,
+.item-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.topbar {
+  padding: 12px 0 18px;
+}
+
+.eyebrow {
+  margin: 0 0 5px;
+  color: var(--accent-dark);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: clamp(30px, 7vw, 48px);
+  line-height: 1.06;
+  font-weight: 900;
+}
+
+h2 {
+  font-size: 22px;
+  font-weight: 900;
+}
+
+h3 {
+  font-size: 17px;
+  font-weight: 900;
+}
+
+.user-chip {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  text-align: right;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.user-chip strong {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.notice {
+  border-left: 5px solid var(--warn);
+  background: #fffaf0;
+  padding: 14px 14px 14px 16px;
+  margin-bottom: 18px;
+  color: #4a3720;
+  line-height: 1.45;
+}
+
+.flash {
+  border: 1px solid #b9d7c4;
+  background: #edf8f0;
+  color: #15552b;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  border-radius: 8px;
+}
+
+.flash.error {
+  border-color: #f0b5ad;
+  background: var(--red-bg);
+  color: var(--red);
+}
+
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 18px;
+  margin-bottom: 14px;
+  box-shadow: 0 1px 2px rgba(12, 31, 28, .04);
+}
+
+.hero-panel {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+}
+
+.stack,
+.grid,
+.card-list {
+  display: grid;
+  gap: 12px;
+}
+
+.grid.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.grid.four {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.compact-metrics {
+  padding-top: 4px;
+}
+
+.compact-metrics span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.compact-metrics strong {
+  display: block;
+  margin-top: 3px;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+input,
+select {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 16px;
+}
+
+button,
+.button {
+  min-height: 42px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  padding: 10px 15px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 900;
+  text-decoration: none;
+  cursor: pointer;
+  text-align: center;
+}
+
+button.secondary,
+.button.secondary {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--accent-dark);
+}
+
+button.danger {
+  background: var(--red-bg);
+  color: var(--red);
+}
+
+button.text {
+  min-height: 0;
+  background: transparent;
+  color: var(--accent-dark);
+  padding: 5px 0;
+}
+
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-top: 14px;
+}
+
+.item {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfdfc;
+  padding: 14px;
+  display: grid;
+  gap: 8px;
+}
+
+.meta {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border-radius: 999px;
+  background: #e7eef7;
+  color: var(--accent-dark);
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.badge.red {
+  background: var(--red-bg);
+  color: var(--red);
+}
+
+.empty {
+  color: var(--muted);
+  padding: 16px;
+}
+
+.auth-card {
+  width: min(420px, 100%);
+}
+
+@media (max-width: 720px) {
+  .app-shell {
+    padding: 14px;
+  }
+
+  .topbar,
+  .panel-head,
+  .item-title,
+  .hero-panel {
+    display: grid;
+  }
+
+  .grid.two,
+  .grid.four {
+    grid-template-columns: 1fr;
+  }
+
+  .user-chip {
+    text-align: left;
+  }
+}

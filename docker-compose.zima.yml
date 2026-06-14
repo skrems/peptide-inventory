@@ -1,0 +1,36 @@
+name: peptide-inventory
+
+services:
+  peptide-inventory:
+    image: ghcr.io/skrems/peptide-inventory:v0.1
+    container_name: peptide-inventory
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      INVENTORY_HOST: "0.0.0.0"
+      INVENTORY_PORT: "8081"
+      INVENTORY_DB: "/data/app.db"
+      INVENTORY_SECRET: "replace-this-with-a-long-random-secret"
+      INVENTORY_TIMEZONE: "America/Los_Angeles"
+      TZ: "America/Los_Angeles"
+    volumes:
+      - /DATA/AppData/peptide-power-assistant/data:/data
+
+x-casaos:
+  architectures:
+    - amd64
+  main: peptide-inventory
+  author: skrems
+  category: Utilities
+  description:
+    en_us: Admin-only inventory tracking for Peptide Power Assistant.
+  developer: skrems
+  icon: https://raw.githubusercontent.com/skrems/peptide-inventory/main/static/icon.svg
+  index: /
+  port_map: "8081"
+  scheme: http
+  tagline:
+    en_us: Track peptide vial stock against shared dose logs.
+  title:
+    en_us: Peptide Inventory
