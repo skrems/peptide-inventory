@@ -9,6 +9,7 @@ This app uses the same SQLite database as Peptide Power Assistant. It reads shar
 - Admin login using Peptide Power Assistant credentials.
 - Admin-only access.
 - Add inventory lots by peptide, vial count, and mg per vial.
+- Add inventory by supplier code, such as `SK10` for Selank 10 mg.
 - Add a new peptide while adding inventory.
 - New peptides are inserted into the shared `peptides` table so they appear in Peptide Power Assistant dropdowns.
 - Usage is calculated from all users' completed `dose_logs` in mg.
@@ -31,6 +32,25 @@ The app creates its own tables:
 inventory_lots
 inventory_adjustments
 ```
+
+## Supplier Codes
+
+The Add Inventory form includes WanShun supplier code lookup from:
+
+```text
+/Users/skrems/Documents/Peptides/Peptide Suplier (WanShun).pdf
+```
+
+Examples:
+
+```text
+SK10 -> Selank, 10 mg per vial
+RT10 -> Retatrutide, 10 mg per vial
+2S10 -> SS-31, 10 mg per vial
+CU50 -> GHK-Cu, 50 mg per vial
+```
+
+Entering a code auto-fills peptide name and mg per vial in the browser. The server also validates the code, so direct form submissions work too.
 
 ## Run Locally
 

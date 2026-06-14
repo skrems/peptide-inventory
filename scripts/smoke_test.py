@@ -168,6 +168,8 @@ def main() -> int:
         inventory = client.get("/inventory")
         require(inventory, "Add inventory")
         require(inventory, "Retatrutide")
+        require(inventory, "Supplier code")
+        require(inventory, "SK10")
 
         client.post(
             "/lots",
@@ -199,6 +201,26 @@ def main() -> int:
             row = conn.execute("SELECT name FROM peptides WHERE name = 'New-Test-Peptide'").fetchone()
             if not row:
                 raise AssertionError("new peptide was not added to shared peptide catalog")
+
+        client.post(
+            "/lots",
+            {
+                "supplier_code": "SK10",
+                "peptide_name": "",
+                "peptide_name_other": "",
+                "vial_count": "2",
+                "mg_per_vial": "",
+                "added_at": "2026-06-14",
+                "notes": "supplier code smoke",
+            },
+        )
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute("SELECT name FROM peptides WHERE name = 'Selank'").fetchone()
+            if not row:
+                raise AssertionError("supplier code peptide was not added to shared peptide catalog")
+            lot = conn.execute("SELECT peptide_name, vial_count, mg_per_vial, notes FROM inventory_lots WHERE peptide_name = 'Selank'").fetchone()
+            if not lot or lot[1] != 2 or lot[2] != 10:
+                raise AssertionError("supplier code did not create the expected Selank lot")
 
         member = Client(f"http://127.0.0.1:{port}")
         try:

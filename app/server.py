@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import mimetypes
 import os
 import secrets
@@ -16,6 +17,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from app.supplier_codes import SUPPLIER_CODES, supplier_lookup
 
 
 APP_NAME = "Peptide Inventory"
@@ -239,6 +242,13 @@ def peptide_options(conn: sqlite3.Connection, selected: str = "") -> str:
     return "\n".join(options)
 
 
+def supplier_code_options() -> str:
+    return "\n".join(
+        f'<option value="{h(code)}">{h(data["name"])} · {fmt_num(float(data["mg_per_vial"]))} {h(data.get("unit", "mg"))}/vial · {h(data["vials_per_pack"])} pack</option>'
+        for code, data in sorted(SUPPLIER_CODES.items())
+    )
+
+
 def layout(ctx: RequestContext, title: str, body: str) -> bytes:
     flash = f'<div class="flash">{h(ctx.flash)}</div>' if ctx.flash else ""
     error = f'<div class="flash error">{h(ctx.error)}</div>' if ctx.error else ""
@@ -275,6 +285,22 @@ def layout(ctx: RequestContext, title: str, body: str) -> bytes:
         {error}
         {body}
       </main>
+      <script>
+        const supplierCodes = {json.dumps(SUPPLIER_CODES, sort_keys=True)};
+        document.addEventListener("input", (event) => {{
+          if (!event.target.matches('[name="supplier_code"]')) return;
+          const code = event.target.value.trim().toUpperCase().replace(/\\s+/g, "");
+          const entry = supplierCodes[code];
+          const form = event.target.closest("form");
+          if (!entry || !form) return;
+          const other = form.querySelector('[name="peptide_name_other"]');
+          const mg = form.querySelector('[name="mg_per_vial"]');
+          const vials = form.querySelector('[name="vial_count"]');
+          if (other) other.value = entry.name || "";
+          if (mg) mg.value = entry.mg_per_vial || "";
+          if (vials && !vials.value) vials.value = entry.vials_per_pack || "";
+        }});
+      </script>
     </body>
     </html>"""
     return html.encode("utf-8")
@@ -383,6 +409,12 @@ def render_inventory(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
       <div class="panel-head"><h2>Add inventory</h2></div>
       <form method="post" action="/lots" class="stack">
         <div class="grid two">
+          <label>Supplier code
+            <input name="supplier_code" list="supplier-codes" placeholder="SK10, RT10, 2S10...">
+            <datalist id="supplier-codes">
+              {supplier_code_options()}
+            </datalist>
+          </label>
           <label>Existing peptide
             <select name="peptide_name">
               <option value="">Choose existing...</option>
@@ -541,17 +573,24 @@ class App(BaseHTTPRequestHandler):
         self.end_headers()
 
     def add_lot(self, conn: sqlite3.Connection, user_id: int, data: dict[str, str]) -> None:
+        code_data = supplier_lookup(data.get("supplier_code", ""))
         peptide_name = (data.get("peptide_name_other") or data.get("peptide_name") or "").strip()
+        if code_data:
+            peptide_name = str(code_data["name"])
         ensure_peptide(conn, peptide_name, "Added from inventory app.")
         vial_count = safe_number(data.get("vial_count", ""), "Vials on hand")
-        mg_per_vial = safe_number(data.get("mg_per_vial", ""), "MG per vial")
+        mg_per_vial = float(code_data["mg_per_vial"]) if code_data else safe_number(data.get("mg_per_vial", ""), "MG per vial")
         added_at = (data.get("added_at") or datetime.now(app_timezone()).date().isoformat()).strip()
+        notes = data.get("notes", "").strip()
+        if code_data:
+            code_note = f"Supplier code {code_data['code']}"
+            notes = f"{code_note}. {notes}" if notes else code_note
         conn.execute(
             """
             INSERT INTO inventory_lots (peptide_name, vial_count, mg_per_vial, added_at, notes, created_by, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (peptide_name, vial_count, mg_per_vial, added_at, data.get("notes", "").strip(), user_id, now_iso()),
+            (peptide_name, vial_count, mg_per_vial, added_at, notes, user_id, now_iso()),
         )
 
     def add_adjustment(self, conn: sqlite3.Connection, user_id: int, data: dict[str, str]) -> None:

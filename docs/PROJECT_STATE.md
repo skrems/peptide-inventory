@@ -36,6 +36,7 @@ inventory_adjustments
 - Login uses existing Peptide Power `users.password_hash` and requires `role = 'admin'`.
 - Adding a new peptide while adding inventory writes to the shared `peptides` table.
 - Peptide Power dropdowns will then include that peptide.
+- WanShun supplier codes are available for inventory entry, for example `SK10` becomes Selank 10 mg per vial.
 - Inventory usage is calculated from all users' completed mg dose logs.
 - Inventory is calculated live; no 3am job is needed for MVP.
 
