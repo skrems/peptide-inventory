@@ -147,24 +147,28 @@ h3 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.grid.four {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+.inventory-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.6fr) repeat(4, minmax(120px, 1fr));
+  gap: 12px;
+  align-items: center;
 }
 
-.compact-metrics {
-  padding-top: 4px;
+.inventory-peptide {
+  min-width: 0;
 }
 
-.compact-metrics span {
+.metric span {
   display: block;
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
 }
 
-.compact-metrics strong {
+.metric strong {
   display: block;
   margin-top: 3px;
+  font-size: 18px;
 }
 
 label {
@@ -285,7 +289,7 @@ button.text {
   }
 
   .grid.two,
-  .grid.four {
+  .inventory-row {
     grid-template-columns: 1fr;
   }
 

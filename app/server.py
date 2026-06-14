@@ -208,6 +208,7 @@ def inventory_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         adjustment_mg = float(adjustments["amount_mg"] or 0)
         remaining_mg = total_mg + adjustment_mg - used_mg
         mg_per_vial = float(latest_lot["mg_per_vial"]) if latest_lot else 0.0
+        remaining_vials = max(remaining_mg / mg_per_vial, 0) if mg_per_vial > 0 else 0.0
         rows.append(
             {
                 "name": name,
@@ -218,7 +219,7 @@ def inventory_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                 "vials_added": float(lot["vials"] or 0),
                 "dose_logs": int(used["logs"] or 0),
                 "mg_per_vial": mg_per_vial,
-                "estimated_vials": remaining_mg / mg_per_vial if mg_per_vial > 0 else None,
+                "remaining_vials": remaining_vials,
             }
         )
     return rows
@@ -342,18 +343,15 @@ def render_home(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
     cards = "".join(
         f"""
         <article class="item">
-          <div class="item-title">
-            <div>
+          <div class="inventory-row">
+            <div class="inventory-peptide">
               <h3>{h(row['name'])}</h3>
-              <p class="meta">{fmt_mg(row['remaining_mg'])} remaining · {fmt_num(row['estimated_vials'])} vials estimated</p>
+              <p class="meta">{fmt_mg(row['remaining_mg'])} remaining · {row['dose_logs']} dose logs</p>
             </div>
-            <span class="badge {'red' if row['remaining_mg'] <= 0 else ''}">{row['dose_logs']} dose logs</span>
-          </div>
-          <div class="grid four compact-metrics">
-            <div><span>Vials</span><strong>{fmt_num(row['estimated_vials'])}</strong></div>
-            <div><span>Used</span><strong>{fmt_mg(row['used_mg'])}</strong></div>
-            <div><span>Adjusted</span><strong>{fmt_mg(row['adjustment_mg'])}</strong></div>
-            <div><span>Total MG</span><strong>{fmt_mg(row['total_mg'])}</strong></div>
+            <div class="metric"><span>Vials on hand</span><strong>{fmt_num(row['remaining_vials'])}</strong></div>
+            <div class="metric"><span>Used MG</span><strong>{fmt_mg(row['used_mg'])}</strong></div>
+            <div class="metric"><span>Adjusted MG</span><strong>{fmt_mg(row['adjustment_mg'])}</strong></div>
+            <div class="metric"><span>Total MG</span><strong>{fmt_mg(row['total_mg'])}</strong></div>
           </div>
         </article>
         """
