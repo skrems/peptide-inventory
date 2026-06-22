@@ -105,6 +105,30 @@ h3 {
   line-height: 1.45;
 }
 
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 14px;
+}
+
+.tabs a {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--accent-dark);
+  padding: 9px 13px;
+  font-size: 14px;
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.tabs a.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
 .flash {
   border: 1px solid #b9d7c4;
   background: #edf8f0;
@@ -189,6 +213,16 @@ h3 {
   display: block;
   margin-top: 3px;
   font-size: 18px;
+}
+
+.event-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.event-item .badge {
+  white-space: nowrap;
 }
 
 label {
@@ -399,7 +433,8 @@ button.text {
   }
 
   .grid.two,
-  .inventory-row {
+  .inventory-row,
+  .event-grid {
     grid-template-columns: 1fr;
   }
 

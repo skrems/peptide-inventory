@@ -164,6 +164,7 @@ def main() -> int:
         require(login, "Inventory")
         require(login, "SS-31")
         require(login, "tracked peptides")
+        require(login, "Log")
 
         inventory = client.get("/inventory")
         require(inventory, "Add inventory")
@@ -190,6 +191,10 @@ def main() -> int:
         require(home, "0 forecast dose logs")
         require(home, "Logged MG")
         require(home, "Total MG")
+        log = client.get("/log")
+        require(log, "Inventory log")
+        require(log, "Lot added: SS-31")
+        require(log, "30 mg")
 
         with sqlite3.connect(db_path) as conn:
             conn.execute(
@@ -211,10 +216,19 @@ def main() -> int:
         require(home, "20 mg on hand")
         require(home, "2")
         require(home, "Vials used")
+        log = client.get("/log")
+        require(log, "Vial used: SS-31")
+        require(log, "Vial marked used/reconstituted")
+        with sqlite3.connect(db_path) as conn:
+            event_count = conn.execute("SELECT COUNT(*) FROM inventory_events WHERE event_type = 'vial_used'").fetchone()[0]
+            if event_count != 1:
+                raise AssertionError("vial use event was not recorded")
 
         client.post("/lots/restore", {"lot_id": str(lot_id)})
         home = client.get("/")
         require(home, "30 mg on hand")
+        log = client.get("/log")
+        require(log, "Vial restored: SS-31")
 
         client.post(
             "/lots",
@@ -231,6 +245,9 @@ def main() -> int:
             row = conn.execute("SELECT name FROM peptides WHERE name = 'New-Test-Peptide'").fetchone()
             if not row:
                 raise AssertionError("new peptide was not added to shared peptide catalog")
+            row = conn.execute("SELECT COUNT(*) FROM inventory_events WHERE peptide_name = 'New-Test-Peptide' AND event_type = 'lot_added'").fetchone()
+            if row[0] != 1:
+                raise AssertionError("new peptide lot event was not recorded")
 
         client.post(
             "/lots",
@@ -251,6 +268,19 @@ def main() -> int:
             lot = conn.execute("SELECT peptide_name, vial_count, mg_per_vial, notes FROM inventory_lots WHERE peptide_name = 'Selank'").fetchone()
             if not lot or lot[1] != 2 or lot[2] != 10:
                 raise AssertionError("supplier code did not create the expected Selank lot")
+
+        client.post(
+            "/adjustments",
+            {
+                "peptide_name": "SS-31",
+                "amount_mg": "-5",
+                "reason": "smoke correction",
+                "notes": "adjustment event",
+            },
+        )
+        log = client.get("/log")
+        require(log, "Adjustment added: SS-31")
+        require(log, "smoke correction")
 
         member = Client(f"http://127.0.0.1:{port}")
         try:

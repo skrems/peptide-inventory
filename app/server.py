@@ -22,7 +22,7 @@ from app.supplier_codes import SUPPLIER_CODES, supplier_lookup
 
 
 APP_NAME = "Peptide Inventory"
-APP_VERSION = "v1.1"
+APP_VERSION = "v1.2"
 ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = ROOT / "static"
 DB_PATH = Path(os.environ.get("INVENTORY_DB", ROOT / "data" / "app.db"))
@@ -99,6 +99,20 @@ def init_db() -> None:
               peptide_name TEXT NOT NULL,
               amount_mg REAL NOT NULL,
               reason TEXT NOT NULL,
+              notes TEXT,
+              created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+              created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS inventory_events (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              event_type TEXT NOT NULL,
+              lot_id INTEGER,
+              peptide_name TEXT NOT NULL,
+              quantity_vials REAL NOT NULL DEFAULT 0,
+              mg_per_vial REAL NOT NULL DEFAULT 0,
+              amount_mg REAL NOT NULL DEFAULT 0,
+              reason TEXT,
               notes TEXT,
               created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
               created_at TEXT NOT NULL
@@ -344,7 +358,12 @@ def supplier_code_options() -> str:
     )
 
 
-def layout(ctx: RequestContext, title: str, body: str) -> bytes:
+def nav_item(path: str, label: str, active: str) -> str:
+    current = "active" if active == path else ""
+    return f'<a class="{current}" href="{path}">{h(label)}</a>'
+
+
+def layout(ctx: RequestContext, title: str, body: str, active: str = "/") -> bytes:
     flash = f'<div class="flash">{h(ctx.flash)}</div>' if ctx.flash else ""
     error = f'<div class="flash error">{h(ctx.error)}</div>' if ctx.error else ""
     user_chip = ""
@@ -376,6 +395,11 @@ def layout(ctx: RequestContext, title: str, body: str) -> bytes:
           {user_chip}
         </header>
         <div class="notice">Inventory helper only. Confirm logs, vial labels, and dose units before making supply decisions.</div>
+        <nav class="tabs">
+          {nav_item("/", "Dashboard", active)}
+          {nav_item("/inventory", "Manage", active)}
+          {nav_item("/log", "Log", active)}
+        </nav>
         {flash}
         {error}
         {body}
@@ -482,7 +506,7 @@ def render_home(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
       <div class="card-list">{cards}</div>
     </section>
     """
-    return layout(ctx, "Inventory", body)
+    return layout(ctx, "Inventory", body, "/")
 
 
 def render_inventory(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
@@ -584,7 +608,64 @@ def render_inventory(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
     </section>
     <div class="button-row"><a class="button secondary" href="/">Back to dashboard</a></div>
     """
-    return layout(ctx, "Manage Inventory", body)
+    return layout(ctx, "Manage Inventory", body, "/inventory")
+
+
+def event_label(event_type: str) -> str:
+    return {
+        "lot_added": "Lot added",
+        "vial_used": "Vial used",
+        "vial_restored": "Vial restored",
+        "lot_deleted": "Lot deleted",
+        "adjustment_added": "Adjustment added",
+    }.get(event_type, event_type.replace("_", " ").title())
+
+
+def render_log(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
+    events = query(
+        conn,
+        """
+        SELECT e.*, u.display_name
+        FROM inventory_events e
+        LEFT JOIN users u ON u.id = e.created_by
+        ORDER BY e.created_at DESC, e.id DESC
+        LIMIT 200
+        """,
+    )
+    event_html = "".join(
+        f"""
+        <article class="item event-item">
+          <div class="item-title">
+            <div>
+              <h3>{h(event_label(row['event_type']))}: {h(row['peptide_name'])}</h3>
+              <p class="meta">{h(row['created_at'])} · {h(row['display_name'] or 'Unknown admin')}</p>
+            </div>
+            <span class="badge">{h(row['event_type'].replace('_', ' '))}</span>
+          </div>
+          <div class="event-grid">
+            <div class="metric"><span>Lot</span><strong>{h(row['lot_id'] or 'n/a')}</strong></div>
+            <div class="metric"><span>Vials</span><strong>{fmt_num(float(row['quantity_vials'] or 0))}</strong></div>
+            <div class="metric"><span>MG / vial</span><strong>{fmt_mg(float(row['mg_per_vial'] or 0))}</strong></div>
+            <div class="metric"><span>Total MG</span><strong>{fmt_mg(float(row['amount_mg'] or 0))}</strong></div>
+          </div>
+          <p class="meta">{h(row['reason'] or '')}</p>
+          <p class="meta">{h(row['notes'] or '')}</p>
+        </article>
+        """
+        for row in events
+    ) or '<div class="empty">No inventory events yet. New vial use, restore, lot, delete, and adjustment actions will appear here.</div>'
+    body = f"""
+    <section class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>Inventory log</h2>
+          <p class="meta">Timestamped audit trail for physical inventory actions.</p>
+        </div>
+      </div>
+      <div class="card-list">{event_html}</div>
+    </section>
+    """
+    return layout(ctx, "Inventory Log", body, "/log")
 
 
 class App(BaseHTTPRequestHandler):
@@ -592,7 +673,7 @@ class App(BaseHTTPRequestHandler):
 
     def do_HEAD(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
-        self.send_response(HTTPStatus.OK if parsed.path in {"/", "/login", "/healthz"} else HTTPStatus.NOT_FOUND)
+        self.send_response(HTTPStatus.OK if parsed.path in {"/", "/inventory", "/log", "/login", "/healthz"} else HTTPStatus.NOT_FOUND)
         self.end_headers()
 
     def do_GET(self) -> None:
@@ -625,6 +706,8 @@ class App(BaseHTTPRequestHandler):
                 return self.html(render_home(ctx, conn))
             if parsed.path == "/inventory":
                 return self.html(render_inventory(ctx, conn))
+            if parsed.path == "/log":
+                return self.html(render_log(ctx, conn))
         self.not_found()
 
     def route_post(self) -> None:
@@ -644,13 +727,13 @@ class App(BaseHTTPRequestHandler):
                 self.add_lot(conn, ctx.user["id"], data)
                 return self.redirect(with_flash("/inventory", "Inventory added"))
             if parsed.path == "/lots/use":
-                self.mark_lot_vial(conn, int(data["lot_id"]), 1)
+                self.mark_lot_vial(conn, ctx.user["id"], int(data["lot_id"]), 1)
                 return self.redirect(with_flash("/inventory", "Vial marked used"))
             if parsed.path == "/lots/restore":
-                self.mark_lot_vial(conn, int(data["lot_id"]), -1)
+                self.mark_lot_vial(conn, ctx.user["id"], int(data["lot_id"]), -1)
                 return self.redirect(with_flash("/inventory", "Vial restored"))
             if parsed.path == "/lots/delete":
-                conn.execute("DELETE FROM inventory_lots WHERE id = ?", (int(data["lot_id"]),))
+                self.delete_lot(conn, ctx.user["id"], int(data["lot_id"]))
                 return self.redirect(with_flash("/inventory", "Inventory lot deleted"))
             if parsed.path == "/adjustments":
                 self.add_adjustment(conn, ctx.user["id"], data)
@@ -719,12 +802,24 @@ class App(BaseHTTPRequestHandler):
         if code_data:
             code_note = f"Supplier code {code_data['code']}"
             notes = f"{code_note}. {notes}" if notes else code_note
-        conn.execute(
+        cursor = conn.execute(
             """
             INSERT INTO inventory_lots (peptide_name, vial_count, mg_per_vial, added_at, notes, created_by, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (peptide_name, vial_count, mg_per_vial, added_at, notes, user_id, now_iso()),
+        )
+        self.record_event(
+            conn,
+            user_id,
+            "lot_added",
+            cursor.lastrowid,
+            peptide_name,
+            vial_count,
+            mg_per_vial,
+            vial_count * mg_per_vial,
+            "Inventory lot added",
+            notes,
         )
 
     def add_adjustment(self, conn: sqlite3.Connection, user_id: int, data: dict[str, str]) -> None:
@@ -742,9 +837,29 @@ class App(BaseHTTPRequestHandler):
             """,
             (peptide_name, amount_mg, reason, data.get("notes", "").strip(), user_id, now_iso()),
         )
+        self.record_event(
+            conn,
+            user_id,
+            "adjustment_added",
+            None,
+            peptide_name,
+            0,
+            0,
+            amount_mg,
+            reason,
+            data.get("notes", "").strip(),
+        )
 
-    def mark_lot_vial(self, conn: sqlite3.Connection, lot_id: int, delta: int) -> None:
-        lot = one(conn, "SELECT id, vial_count, COALESCE(vials_used, 0) AS vials_used FROM inventory_lots WHERE id = ?", (lot_id,))
+    def mark_lot_vial(self, conn: sqlite3.Connection, user_id: int, lot_id: int, delta: int) -> None:
+        lot = one(
+            conn,
+            """
+            SELECT id, peptide_name, vial_count, mg_per_vial, COALESCE(vials_used, 0) AS vials_used, notes
+            FROM inventory_lots
+            WHERE id = ?
+            """,
+            (lot_id,),
+        )
         if not lot:
             raise ValueError("Inventory lot not found.")
         vial_count = float(lot["vial_count"])
@@ -755,6 +870,71 @@ class App(BaseHTTPRequestHandler):
         if next_used > vial_count:
             raise ValueError("All vials in this lot are already marked used.")
         conn.execute("UPDATE inventory_lots SET vials_used = ? WHERE id = ?", (next_used, lot_id))
+        event_type = "vial_used" if delta > 0 else "vial_restored"
+        reason = "Vial marked used/reconstituted" if delta > 0 else "Vial restored to on-hand stock"
+        mg_per_vial = float(lot["mg_per_vial"])
+        self.record_event(
+            conn,
+            user_id,
+            event_type,
+            lot_id,
+            lot["peptide_name"],
+            abs(delta),
+            mg_per_vial,
+            abs(delta) * mg_per_vial,
+            reason,
+            lot["notes"] or "",
+        )
+
+    def delete_lot(self, conn: sqlite3.Connection, user_id: int, lot_id: int) -> None:
+        lot = one(
+            conn,
+            """
+            SELECT id, peptide_name, vial_count, mg_per_vial, COALESCE(vials_used, 0) AS vials_used, notes
+            FROM inventory_lots
+            WHERE id = ?
+            """,
+            (lot_id,),
+        )
+        if not lot:
+            raise ValueError("Inventory lot not found.")
+        remaining_vials = max(float(lot["vial_count"]) - float(lot["vials_used"]), 0)
+        mg_per_vial = float(lot["mg_per_vial"])
+        self.record_event(
+            conn,
+            user_id,
+            "lot_deleted",
+            lot_id,
+            lot["peptide_name"],
+            remaining_vials,
+            mg_per_vial,
+            remaining_vials * mg_per_vial,
+            "Inventory lot deleted",
+            lot["notes"] or "",
+        )
+        conn.execute("DELETE FROM inventory_lots WHERE id = ?", (lot_id,))
+
+    def record_event(
+        self,
+        conn: sqlite3.Connection,
+        user_id: int,
+        event_type: str,
+        lot_id: int | None,
+        peptide_name: str,
+        quantity_vials: float,
+        mg_per_vial: float,
+        amount_mg: float,
+        reason: str,
+        notes: str,
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO inventory_events
+              (event_type, lot_id, peptide_name, quantity_vials, mg_per_vial, amount_mg, reason, notes, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (event_type, lot_id, peptide_name, quantity_vials, mg_per_vial, amount_mg, reason, notes, user_id, now_iso()),
+        )
 
     def serve_static(self, path: Path) -> None:
         resolved = path.resolve()
