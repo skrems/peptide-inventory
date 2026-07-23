@@ -5,6 +5,7 @@ import hmac
 import json
 import mimetypes
 import os
+import re
 import secrets
 import sqlite3
 import sys
@@ -22,7 +23,7 @@ from app.supplier_codes import SUPPLIER_CODES, supplier_lookup
 
 
 APP_NAME = "Peptide Inventory"
-APP_VERSION = "v1.2"
+APP_VERSION = "v1.3"
 ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = ROOT / "static"
 DB_PATH = Path(os.environ.get("INVENTORY_DB", ROOT / "data" / "app.db"))
@@ -194,7 +195,9 @@ def ensure_peptide(conn: sqlite3.Connection, name: str, notes: str = "") -> None
 
 
 def inventory_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    peptides = [row["name"] for row in peptide_catalog(conn)]
+    catalog = peptide_catalog(conn)
+    peptides = [row["name"] for row in catalog]
+    peptide_colors = {row["name"]: row["color"] for row in catalog}
     lot_names = [row["peptide_name"] for row in query(conn, "SELECT DISTINCT peptide_name FROM inventory_lots")]
     adj_names = [row["peptide_name"] for row in query(conn, "SELECT DISTINCT peptide_name FROM inventory_adjustments")]
     names = sorted({*peptides, *lot_names, *adj_names}, key=str.lower)
@@ -268,6 +271,7 @@ def inventory_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         rows.append(
             {
                 "name": name,
+                "color": safe_color(peptide_colors.get(name)),
                 "total_mg": remaining_mg,
                 "total_added_mg": total_added_mg,
                 "logged_mg": logged_mg,
@@ -283,6 +287,11 @@ def inventory_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             }
         )
     return rows
+
+
+def safe_color(value: Any) -> str:
+    color = str(value or "").strip()
+    return color if re.fullmatch(r"#[0-9a-fA-F]{6}", color) else "#60706a"
 
 
 def fmt_mg(value: float) -> str:
@@ -398,6 +407,7 @@ def layout(ctx: RequestContext, title: str, body: str, active: str = "/") -> byt
         <nav class="tabs">
           {nav_item("/", "Dashboard", active)}
           {nav_item("/inventory", "Manage", active)}
+          {nav_item("/vials", "Vial view", active)}
           {nav_item("/log", "Log", active)}
         </nav>
         {flash}
@@ -611,6 +621,68 @@ def render_inventory(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
     return layout(ctx, "Manage Inventory", body, "/inventory")
 
 
+def render_vial_view(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
+    stock_rows = [row for row in inventory_rows(conn) if row["remaining_vials"] > 0]
+    total_vials = sum(row["remaining_vials"] for row in stock_rows)
+
+    def vial_markers(row: dict[str, Any]) -> str:
+        full_vials = int(row["remaining_vials"])
+        partial_vial = row["remaining_vials"] - full_vials
+        color = h(row["color"])
+        markers = "".join(
+            f'<span class="vial-marker" style="--vial-color: {color}" aria-hidden="true"></span>'
+            for _ in range(full_vials)
+        )
+        if partial_vial >= 0.01:
+            fill = max(1, min(99, round(partial_vial * 100)))
+            markers += (
+                f'<span class="vial-marker partial" style="--vial-color: {color}; --vial-fill: {fill}%" '
+                'aria-hidden="true"></span>'
+            )
+        return markers
+
+    groups = "".join(
+        f"""
+        <article class="vial-group">
+          <div class="vial-group-head">
+            <div class="vial-name">
+              <span class="color-swatch" style="--swatch-color: {h(row['color'])}" aria-hidden="true"></span>
+              <div>
+                <h3>{h(row['name'])}</h3>
+                <p class="meta">{fmt_mg(row['remaining_mg'])} on hand</p>
+              </div>
+            </div>
+            <strong class="vial-count">{fmt_num(row['remaining_vials'])} vial{'s' if row['remaining_vials'] != 1 else ''}</strong>
+          </div>
+          <div class="vial-grid" aria-label="{h(row['name'])}: {fmt_num(row['remaining_vials'])} vials on hand">
+            {vial_markers(row)}
+          </div>
+        </article>
+        """
+        for row in stock_rows
+    ) or '<div class="empty">No physical vial stock is currently on hand.</div>'
+    body = f"""
+    <section class="panel vial-hero">
+      <div>
+        <p class="eyebrow">Physical stock</p>
+        <h2>{fmt_num(total_vials)} vials on hand</h2>
+        <p class="meta">Each marker represents one vial currently on hand. Used/reconstituted vials are excluded.</p>
+      </div>
+      <a class="button secondary" href="/inventory">Manage inventory</a>
+    </section>
+    <section class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>Vial view</h2>
+          <p class="meta">A visual count of your physical stock, grouped by peptide.</p>
+        </div>
+      </div>
+      <div class="vial-list">{groups}</div>
+    </section>
+    """
+    return layout(ctx, "Vial View", body, "/vials")
+
+
 def event_label(event_type: str) -> str:
     return {
         "lot_added": "Lot added",
@@ -673,7 +745,7 @@ class App(BaseHTTPRequestHandler):
 
     def do_HEAD(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
-        self.send_response(HTTPStatus.OK if parsed.path in {"/", "/inventory", "/log", "/login", "/healthz"} else HTTPStatus.NOT_FOUND)
+        self.send_response(HTTPStatus.OK if parsed.path in {"/", "/inventory", "/vials", "/log", "/login", "/healthz"} else HTTPStatus.NOT_FOUND)
         self.end_headers()
 
     def do_GET(self) -> None:
@@ -706,6 +778,8 @@ class App(BaseHTTPRequestHandler):
                 return self.html(render_home(ctx, conn))
             if parsed.path == "/inventory":
                 return self.html(render_inventory(ctx, conn))
+            if parsed.path == "/vials":
+                return self.html(render_vial_view(ctx, conn))
             if parsed.path == "/log":
                 return self.html(render_log(ctx, conn))
         self.not_found()
