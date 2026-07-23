@@ -23,7 +23,7 @@ from app.supplier_codes import SUPPLIER_CODES, supplier_lookup
 
 
 APP_NAME = "Peptide Inventory"
-APP_VERSION = "v1.3"
+APP_VERSION = "v1.4"
 ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = ROOT / "static"
 DB_PATH = Path(os.environ.get("INVENTORY_DB", ROOT / "data" / "app.db"))
@@ -408,6 +408,7 @@ def layout(ctx: RequestContext, title: str, body: str, active: str = "/") -> byt
           {nav_item("/", "Dashboard", active)}
           {nav_item("/inventory", "Manage", active)}
           {nav_item("/vials", "Vial view", active)}
+          {nav_item("/one-k", "1K foot view", active)}
           {nav_item("/log", "Log", active)}
         </nav>
         {flash}
@@ -621,25 +622,26 @@ def render_inventory(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
     return layout(ctx, "Manage Inventory", body, "/inventory")
 
 
+def vial_markers(row: dict[str, Any]) -> str:
+    full_vials = int(row["remaining_vials"])
+    partial_vial = row["remaining_vials"] - full_vials
+    color = h(row["color"])
+    markers = "".join(
+        f'<span class="vial-marker" style="--vial-color: {color}" aria-hidden="true"></span>'
+        for _ in range(full_vials)
+    )
+    if partial_vial >= 0.01:
+        fill = max(1, min(99, round(partial_vial * 100)))
+        markers += (
+            f'<span class="vial-marker partial" style="--vial-color: {color}; --vial-fill: {fill}%" '
+            'aria-hidden="true"></span>'
+        )
+    return markers
+
+
 def render_vial_view(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
     stock_rows = [row for row in inventory_rows(conn) if row["remaining_vials"] > 0]
     total_vials = sum(row["remaining_vials"] for row in stock_rows)
-
-    def vial_markers(row: dict[str, Any]) -> str:
-        full_vials = int(row["remaining_vials"])
-        partial_vial = row["remaining_vials"] - full_vials
-        color = h(row["color"])
-        markers = "".join(
-            f'<span class="vial-marker" style="--vial-color: {color}" aria-hidden="true"></span>'
-            for _ in range(full_vials)
-        )
-        if partial_vial >= 0.01:
-            fill = max(1, min(99, round(partial_vial * 100)))
-            markers += (
-                f'<span class="vial-marker partial" style="--vial-color: {color}; --vial-fill: {fill}%" '
-                'aria-hidden="true"></span>'
-            )
-        return markers
 
     groups = "".join(
         f"""
@@ -681,6 +683,48 @@ def render_vial_view(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
     </section>
     """
     return layout(ctx, "Vial View", body, "/vials")
+
+
+def render_one_k_view(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
+    stock_rows = sorted(
+        (row for row in inventory_rows(conn) if row["remaining_vials"] > 0),
+        key=lambda row: row["name"].lower(),
+    )
+    total_vials = sum(row["remaining_vials"] for row in stock_rows)
+    all_markers = "".join(vial_markers(row) for row in stock_rows)
+    legend = "".join(
+        f"""
+        <div class="vial-legend-item">
+          <span class="color-swatch" style="--swatch-color: {h(row['color'])}" aria-hidden="true"></span>
+          <span>{h(row['name'])}</span>
+          <strong>{fmt_num(row['remaining_vials'])}</strong>
+        </div>
+        """
+        for row in stock_rows
+    ) or '<div class="empty">No physical vial stock is currently on hand.</div>'
+    body = f"""
+    <section class="panel one-k-hero">
+      <div>
+        <p class="eyebrow">Thousand-foot view</p>
+        <h2>{fmt_num(total_vials)} vials on hand</h2>
+        <p class="meta">Every colored marker is one physical vial. Colors change as one peptide runs into the next.</p>
+      </div>
+      <a class="button secondary" href="/inventory">Manage inventory</a>
+    </section>
+    <section class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>All physical stock</h2>
+          <p class="meta">{len(stock_rows)} peptides currently have vials on hand.</p>
+        </div>
+      </div>
+      <div class="vial-mosaic" aria-label="{fmt_num(total_vials)} vials currently on hand across {len(stock_rows)} peptides">
+        {all_markers}
+      </div>
+      <div class="vial-legend" aria-label="Vial color legend">{legend}</div>
+    </section>
+    """
+    return layout(ctx, "1K Foot View", body, "/one-k")
 
 
 def event_label(event_type: str) -> str:
@@ -745,7 +789,7 @@ class App(BaseHTTPRequestHandler):
 
     def do_HEAD(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
-        self.send_response(HTTPStatus.OK if parsed.path in {"/", "/inventory", "/vials", "/log", "/login", "/healthz"} else HTTPStatus.NOT_FOUND)
+        self.send_response(HTTPStatus.OK if parsed.path in {"/", "/inventory", "/vials", "/one-k", "/log", "/login", "/healthz"} else HTTPStatus.NOT_FOUND)
         self.end_headers()
 
     def do_GET(self) -> None:
@@ -780,6 +824,8 @@ class App(BaseHTTPRequestHandler):
                 return self.html(render_inventory(ctx, conn))
             if parsed.path == "/vials":
                 return self.html(render_vial_view(ctx, conn))
+            if parsed.path == "/one-k":
+                return self.html(render_one_k_view(ctx, conn))
             if parsed.path == "/log":
                 return self.html(render_log(ctx, conn))
         self.not_found()

@@ -305,6 +305,13 @@ button.text {
   gap: 16px;
 }
 
+.one-k-hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
 .vial-list {
   display: grid;
   gap: 12px;
@@ -350,6 +357,48 @@ button.text {
   flex-wrap: wrap;
   gap: 8px 6px;
   margin-top: 14px;
+}
+
+.vial-mosaic {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 5px;
+  margin-top: 16px;
+  padding: 16px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: #f9fbfd;
+}
+
+.vial-mosaic .vial-marker {
+  width: 15px;
+  height: 24px;
+}
+
+.vial-mosaic .vial-marker::before {
+  width: 9px;
+  height: 4px;
+  left: 2px;
+}
+
+.vial-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-top: 16px;
+}
+
+.vial-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.vial-legend-item strong {
+  color: var(--ink);
 }
 
 .vial-marker {
@@ -512,7 +561,8 @@ button.text {
   .panel-head,
   .item-title,
   .hero-panel,
-  .vial-hero {
+  .vial-hero,
+  .one-k-hero {
     display: grid;
   }
 

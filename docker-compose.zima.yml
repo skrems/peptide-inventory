@@ -2,7 +2,7 @@ name: peptide-inventory
 
 services:
   peptide-inventory:
-    image: ghcr.io/skrems/peptide-inventory:v1.3
+    image: ghcr.io/skrems/peptide-inventory:v1.4
     container_name: peptide-inventory
     restart: unless-stopped
     ports:
