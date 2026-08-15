@@ -23,7 +23,7 @@ from app.supplier_codes import SUPPLIER_CODES, supplier_lookup
 
 
 APP_NAME = "Peptide Inventory"
-APP_VERSION = "v1.5"
+APP_VERSION = "v1.6"
 ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = ROOT / "static"
 DB_PATH = Path(os.environ.get("INVENTORY_DB", ROOT / "data" / "app.db"))
@@ -452,6 +452,7 @@ def layout(ctx: RequestContext, title: str, body: str, active: str = "/") -> byt
         <div class="user-chip">
           <strong>{h(ctx.user['display_name'])}</strong>
           <span>{h(ctx.user['email'])}</span>
+          <span class="version-chip" title="Running application version">Version {h(APP_VERSION)}</span>
           <form method="post" action="/logout"><button class="text" type="submit">Log out</button></form>
         </div>
         """

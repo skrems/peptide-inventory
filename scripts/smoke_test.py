@@ -165,6 +165,7 @@ def main() -> int:
         require(login, "SS-31")
         require(login, "tracked peptides")
         require(login, "Log")
+        require(login, "Version v1.6")
 
         inventory = client.get("/inventory")
         require(inventory, "Add inventory")

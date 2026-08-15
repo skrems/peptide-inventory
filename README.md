@@ -104,7 +104,7 @@ That means both apps use:
 Current image tag:
 
 ```text
-ghcr.io/skrems/peptide-inventory:v1.5
+ghcr.io/skrems/peptide-inventory:v1.6
 ```
 
 Use explicit version tags on ZimaOS custom apps. Do not rely on `latest`.
@@ -132,7 +132,7 @@ git push origin <version>
 
 ```text
 Docker image: ghcr.io/skrems/peptide-inventory
-Tag: v1.5
+Tag: v1.6
 Port: 8081 -> 8081
 Volume: /DATA/AppData/peptide-power-assistant/data -> /data
 ```
