@@ -8,7 +8,9 @@ This app uses the same SQLite database as Peptide Power Assistant. It reads shar
 
 - Admin login using Peptide Power Assistant credentials.
 - Admin-only access.
-- Add inventory lots by peptide, vial count, and mg per vial.
+- Add inventory lots by peptide, vendor, vial count, and strength per vial.
+- Track lot strength in either mg or IU without mixing units in peptide totals.
+- Record optional batch and expiry dates on each lot.
 - Add inventory by supplier code, such as `SK10` for Selank 10 mg.
 - Add a new peptide while adding inventory.
 - New peptides are inserted into the shared `peptides` table so they appear in Peptide Power Assistant dropdowns.
@@ -102,7 +104,7 @@ That means both apps use:
 Current image tag:
 
 ```text
-ghcr.io/skrems/peptide-inventory:v1.4
+ghcr.io/skrems/peptide-inventory:v1.5
 ```
 
 Use explicit version tags on ZimaOS custom apps. Do not rely on `latest`.
@@ -130,7 +132,7 @@ git push origin <version>
 
 ```text
 Docker image: ghcr.io/skrems/peptide-inventory
-Tag: v1.4
+Tag: v1.5
 Port: 8081 -> 8081
 Volume: /DATA/AppData/peptide-power-assistant/data -> /data
 ```

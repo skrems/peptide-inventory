@@ -171,12 +171,21 @@ def main() -> int:
         require(inventory, "Retatrutide")
         require(inventory, "Supplier code")
         require(inventory, "SK10")
+        require(inventory, "H36")
+        require(inventory, "Vendor name")
+        require(inventory, "Batch date")
+        require(inventory, "Expiry date")
+        require(inventory, "IU")
 
         client.post(
             "/lots",
             {
                 "peptide_name": "SS-31",
                 "peptide_name_other": "",
+                "vendor_name": "Smoke Vendor",
+                "unit": "mg",
+                "batch_date": "2026-06-01",
+                "expiry_date": "2028-06-01",
                 "vial_count": "3",
                 "mg_per_vial": "10",
                 "added_at": "2026-06-14",
@@ -191,6 +200,14 @@ def main() -> int:
         require(home, "0 forecast dose logs")
         require(home, "Logged MG")
         require(home, "Total MG")
+        inventory = client.get("/inventory")
+        require(inventory, "vendor Smoke Vendor")
+        with sqlite3.connect(db_path) as conn:
+            lot_metadata = conn.execute(
+                "SELECT vendor_name, unit, batch_date, expiry_date FROM inventory_lots WHERE peptide_name = 'SS-31' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            if lot_metadata != ("Smoke Vendor", "mg", "2026-06-01", "2028-06-01"):
+                raise AssertionError("inventory lot vendor, unit, batch, or expiry was not stored")
         vials = client.get("/vials")
         require(vials, "Vial view")
         require(vials, "Each marker represents one vial currently on hand")
@@ -249,6 +266,8 @@ def main() -> int:
             {
                 "peptide_name": "",
                 "peptide_name_other": "New-Test-Peptide",
+                "vendor_name": "New Peptide Vendor",
+                "unit": "mg",
                 "vial_count": "1",
                 "mg_per_vial": "5",
                 "added_at": "2026-06-14",
@@ -269,6 +288,8 @@ def main() -> int:
                 "supplier_code": "SK10",
                 "peptide_name": "",
                 "peptide_name_other": "",
+                "vendor_name": "WanShun Peptide",
+                "unit": "mg",
                 "vial_count": "2",
                 "mg_per_vial": "",
                 "added_at": "2026-06-14",
@@ -279,9 +300,64 @@ def main() -> int:
             row = conn.execute("SELECT name FROM peptides WHERE name = 'Selank'").fetchone()
             if not row:
                 raise AssertionError("supplier code peptide was not added to shared peptide catalog")
-            lot = conn.execute("SELECT peptide_name, vial_count, mg_per_vial, notes FROM inventory_lots WHERE peptide_name = 'Selank'").fetchone()
+            lot = conn.execute("SELECT peptide_name, vial_count, mg_per_vial, notes, vendor_name FROM inventory_lots WHERE peptide_name = 'Selank'").fetchone()
             if not lot or lot[1] != 2 or lot[2] != 10:
                 raise AssertionError("supplier code did not create the expected Selank lot")
+            if lot[4] != "WanShun Peptide":
+                raise AssertionError("supplier code lot vendor was not stored")
+
+        client.post(
+            "/lots",
+            {
+                "supplier_code": "H36",
+                "peptide_name": "",
+                "peptide_name_other": "",
+                "vendor_name": "Luvino US",
+                "vial_count": "10",
+                "mg_per_vial": "",
+                "unit": "mg",
+                "batch_date": "2026-07-15",
+                "expiry_date": "2028-07-14",
+                "added_at": "2026-08-14",
+                "notes": "HGH unit smoke",
+            },
+        )
+        home = client.get("/")
+        require(home, "HGH")
+        require(home, "360 IU")
+        require(home, "Total IU")
+        inventory = client.get("/inventory")
+        require(inventory, "36 IU/vial")
+        require(inventory, "vendor Luvino US")
+        require(inventory, "batch 2026-07-15")
+        require(inventory, "expires 2028-07-14")
+        log = client.get("/log")
+        require(log, "Total IU")
+        with sqlite3.connect(db_path) as conn:
+            hgh_lot = conn.execute(
+                "SELECT peptide_name, vial_count, mg_per_vial, unit FROM inventory_lots WHERE peptide_name = 'HGH'"
+            ).fetchone()
+            if hgh_lot != ("HGH", 10, 36, "iu"):
+                raise AssertionError("H36 supplier code did not create the expected IU lot")
+        try:
+            client.post(
+                "/lots",
+                {
+                    "peptide_name": "HGH",
+                    "peptide_name_other": "",
+                    "vendor_name": "Wrong Unit Vendor",
+                    "vial_count": "1",
+                    "mg_per_vial": "36",
+                    "unit": "mg",
+                    "added_at": "2026-08-14",
+                    "notes": "must be rejected",
+                },
+            )
+        except urllib.error.HTTPError as exc:
+            if exc.code != 400:
+                raise
+        else:
+            raise AssertionError("mixed units were allowed for one peptide")
 
         client.post(
             "/adjustments",

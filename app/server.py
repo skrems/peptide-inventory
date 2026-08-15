@@ -23,7 +23,7 @@ from app.supplier_codes import SUPPLIER_CODES, supplier_lookup
 
 
 APP_NAME = "Peptide Inventory"
-APP_VERSION = "v1.4"
+APP_VERSION = "v1.5"
 ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = ROOT / "static"
 DB_PATH = Path(os.environ.get("INVENTORY_DB", ROOT / "data" / "app.db"))
@@ -88,7 +88,11 @@ def init_db() -> None:
               peptide_name TEXT NOT NULL,
               vial_count REAL NOT NULL,
               mg_per_vial REAL NOT NULL,
+              unit TEXT NOT NULL DEFAULT 'mg',
               vials_used REAL NOT NULL DEFAULT 0,
+              vendor_name TEXT NOT NULL DEFAULT '',
+              batch_date TEXT NOT NULL DEFAULT '',
+              expiry_date TEXT NOT NULL DEFAULT '',
               added_at TEXT NOT NULL,
               notes TEXT,
               created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -99,6 +103,7 @@ def init_db() -> None:
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               peptide_name TEXT NOT NULL,
               amount_mg REAL NOT NULL,
+              unit TEXT NOT NULL DEFAULT 'mg',
               reason TEXT NOT NULL,
               notes TEXT,
               created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -113,6 +118,7 @@ def init_db() -> None:
               quantity_vials REAL NOT NULL DEFAULT 0,
               mg_per_vial REAL NOT NULL DEFAULT 0,
               amount_mg REAL NOT NULL DEFAULT 0,
+              unit TEXT NOT NULL DEFAULT 'mg',
               reason TEXT,
               notes TEXT,
               created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -123,6 +129,20 @@ def init_db() -> None:
         columns = {row["name"] for row in query(conn, "PRAGMA table_info(inventory_lots)")}
         if "vials_used" not in columns:
             conn.execute("ALTER TABLE inventory_lots ADD COLUMN vials_used REAL NOT NULL DEFAULT 0")
+        if "vendor_name" not in columns:
+            conn.execute("ALTER TABLE inventory_lots ADD COLUMN vendor_name TEXT NOT NULL DEFAULT ''")
+        if "batch_date" not in columns:
+            conn.execute("ALTER TABLE inventory_lots ADD COLUMN batch_date TEXT NOT NULL DEFAULT ''")
+        if "expiry_date" not in columns:
+            conn.execute("ALTER TABLE inventory_lots ADD COLUMN expiry_date TEXT NOT NULL DEFAULT ''")
+        if "unit" not in columns:
+            conn.execute("ALTER TABLE inventory_lots ADD COLUMN unit TEXT NOT NULL DEFAULT 'mg'")
+        adjustment_columns = {row["name"] for row in query(conn, "PRAGMA table_info(inventory_adjustments)")}
+        if "unit" not in adjustment_columns:
+            conn.execute("ALTER TABLE inventory_adjustments ADD COLUMN unit TEXT NOT NULL DEFAULT 'mg'")
+        event_columns = {row["name"] for row in query(conn, "PRAGMA table_info(inventory_events)")}
+        if "unit" not in event_columns:
+            conn.execute("ALTER TABLE inventory_events ADD COLUMN unit TEXT NOT NULL DEFAULT 'mg'")
 
 
 def query(conn: sqlite3.Connection, sql: str, args: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
@@ -194,6 +214,23 @@ def ensure_peptide(conn: sqlite3.Connection, name: str, notes: str = "") -> None
     )
 
 
+def ensure_peptide_unit(conn: sqlite3.Connection, name: str, unit: str) -> None:
+    units = {
+        normalize_unit(row["unit"])
+        for row in query(
+            conn,
+            """
+            SELECT unit FROM inventory_lots WHERE peptide_name = ?
+            UNION SELECT unit FROM inventory_adjustments WHERE peptide_name = ?
+            """,
+            (name, name),
+        )
+    }
+    if units and units != {unit}:
+        existing = ", ".join(unit_label(value) for value in sorted(units))
+        raise ValueError(f"{name} already uses {existing}; units cannot be mixed for one peptide.")
+
+
 def inventory_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     catalog = peptide_catalog(conn)
     peptides = [row["name"] for row in catalog]
@@ -203,6 +240,19 @@ def inventory_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     names = sorted({*peptides, *lot_names, *adj_names}, key=str.lower)
     rows: list[dict[str, Any]] = []
     for name in names:
+        unit_row = one(
+            conn,
+            """
+            SELECT unit FROM (
+              SELECT unit, created_at, id FROM inventory_lots WHERE peptide_name = ?
+              UNION ALL
+              SELECT unit, created_at, id FROM inventory_adjustments WHERE peptide_name = ?
+            )
+            ORDER BY created_at DESC, id DESC LIMIT 1
+            """,
+            (name, name),
+        )
+        unit = normalize_unit(unit_row["unit"] if unit_row else "mg")
         lot = one(
             conn,
             """
@@ -213,51 +263,51 @@ def inventory_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
               COALESCE(SUM(COALESCE(vials_used, 0)), 0) vials_used,
               COALESCE(SUM(CASE WHEN vial_count > COALESCE(vials_used, 0) THEN vial_count - COALESCE(vials_used, 0) ELSE 0 END), 0) vials_on_hand
             FROM inventory_lots
-            WHERE peptide_name = ?
+            WHERE peptide_name = ? AND lower(unit) = ?
             """,
-            (name,),
+            (name, unit),
         )
         baseline = one(
             conn,
             """
             SELECT MIN(created_at) inventory_started_at
             FROM (
-              SELECT created_at FROM inventory_lots WHERE peptide_name = ?
+              SELECT created_at FROM inventory_lots WHERE peptide_name = ? AND lower(unit) = ?
               UNION ALL
-              SELECT created_at FROM inventory_adjustments WHERE peptide_name = ?
+              SELECT created_at FROM inventory_adjustments WHERE peptide_name = ? AND lower(unit) = ?
             )
             """,
-            (name, name),
+            (name, unit, name, unit),
         )
         inventory_started_at = baseline["inventory_started_at"] if baseline else None
         if inventory_started_at:
             logged = one(
                 conn,
                 """
-                SELECT COALESCE(SUM(actual_dose_amount), 0) logged_mg, COUNT(*) logs
+                SELECT COALESCE(SUM(actual_dose_amount), 0) logged_amount, COUNT(*) logs
                 FROM dose_logs
                 WHERE peptide_name = ?
                   AND status = 'completed'
-                  AND dose_unit = 'mg'
+                  AND lower(dose_unit) = ?
                   AND logged_at >= ?
                 """,
-                (name, inventory_started_at),
+                (name, unit, inventory_started_at),
             )
         else:
-            logged = {"logged_mg": 0, "logs": 0}
+            logged = {"logged_amount": 0, "logs": 0}
         adjustments = one(
             conn,
-            "SELECT COALESCE(SUM(amount_mg), 0) amount_mg FROM inventory_adjustments WHERE peptide_name = ?",
-            (name,),
+            "SELECT COALESCE(SUM(amount_mg), 0) amount_mg FROM inventory_adjustments WHERE peptide_name = ? AND lower(unit) = ?",
+            (name, unit),
         )
         latest_lot = one(
             conn,
-            "SELECT mg_per_vial FROM inventory_lots WHERE peptide_name = ? ORDER BY added_at DESC, id DESC LIMIT 1",
-            (name,),
+            "SELECT mg_per_vial FROM inventory_lots WHERE peptide_name = ? AND lower(unit) = ? ORDER BY added_at DESC, id DESC LIMIT 1",
+            (name, unit),
         )
         total_added_mg = float(lot["total_added_mg"] or 0)
         on_hand_mg = float(lot["on_hand_mg"] or 0)
-        logged_mg = float(logged["logged_mg"] or 0)
+        logged_mg = float(logged["logged_amount"] or 0)
         adjustment_mg = float(adjustments["amount_mg"] or 0)
         remaining_mg = on_hand_mg + adjustment_mg
         mg_per_vial = float(latest_lot["mg_per_vial"]) if latest_lot else 0.0
@@ -271,6 +321,7 @@ def inventory_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         rows.append(
             {
                 "name": name,
+                "unit": unit,
                 "color": safe_color(peptide_colors.get(name)),
                 "total_mg": remaining_mg,
                 "total_added_mg": total_added_mg,
@@ -295,7 +346,27 @@ def safe_color(value: Any) -> str:
 
 
 def fmt_mg(value: float) -> str:
-    return f"{value:,.2f} mg".replace(".00 mg", " mg")
+    return fmt_amount(value, "mg")
+
+
+def normalize_unit(value: Any) -> str:
+    unit = str(value or "mg").strip().lower()
+    if unit not in {"mg", "iu"}:
+        raise ValueError("Unit must be mg or IU.")
+    return unit
+
+
+def unit_label(unit: str) -> str:
+    return "IU" if normalize_unit(unit) == "iu" else "mg"
+
+
+def unit_heading(unit: str) -> str:
+    return unit_label(unit).upper()
+
+
+def fmt_amount(value: float, unit: str) -> str:
+    label = unit_label(unit)
+    return f"{value:,.2f} {label}".replace(f".00 {label}", f" {label}")
 
 
 def fmt_num(value: float | None) -> str:
@@ -425,9 +496,11 @@ def layout(ctx: RequestContext, title: str, body: str, active: str = "/") -> byt
           if (!entry || !form) return;
           const other = form.querySelector('[name="peptide_name_other"]');
           const mg = form.querySelector('[name="mg_per_vial"]');
+          const unit = form.querySelector('[name="unit"]');
           const vials = form.querySelector('[name="vial_count"]');
           if (other) other.value = entry.name || "";
           if (mg) mg.value = entry.mg_per_vial || "";
+          if (unit) unit.value = (entry.unit || "mg").toLowerCase();
           if (vials && !vials.value) vials.value = entry.vials_per_pack || "";
         }});
       </script>
@@ -467,7 +540,13 @@ def login_page(error: str | None = None) -> bytes:
 
 def render_home(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
     rows = inventory_rows(conn)
-    total_remaining = sum(row["remaining_mg"] for row in rows)
+    totals_by_unit = {
+        unit: sum(row["remaining_mg"] for row in rows if row["unit"] == unit)
+        for unit in ("mg", "iu")
+    }
+    stock_summary = " · ".join(
+        fmt_amount(total, unit) for unit, total in totals_by_unit.items() if total
+    ) or "0 mg"
     states = {state: sum(1 for row in rows if health_state(row) == state) for state in ("critical", "low", "healthy", "unknown")}
     forecast_text = lambda row: f" · ~{fmt_num(row['projected_days'])} days at logged pace" if row["projected_days"] else ""
     cards = "".join(
@@ -476,13 +555,13 @@ def render_home(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
           <div class="inventory-row">
             <div class="inventory-peptide">
               <h3>{h(row['name'])}</h3>
-              <p class="meta">{fmt_mg(row['remaining_mg'])} on hand · {row['dose_logs']} forecast dose logs{forecast_text(row)}</p>
+              <p class="meta">{fmt_amount(row['remaining_mg'], row['unit'])} on hand · {row['dose_logs']} forecast dose logs{forecast_text(row)}</p>
             </div>
             <div class="metric"><span>Vials on hand</span><strong>{fmt_num(row['remaining_vials'])}</strong></div>
             <div class="metric"><span>Vials used</span><strong>{fmt_num(row['vials_used'])}</strong></div>
-            <div class="metric"><span>Logged MG</span><strong>{fmt_mg(row['logged_mg'])}</strong></div>
-            <div class="metric"><span>Adjusted MG</span><strong>{fmt_mg(row['adjustment_mg'])}</strong></div>
-            <div class="metric"><span>Total MG</span><strong>{fmt_mg(row['total_mg'])}</strong></div>
+            <div class="metric"><span>Logged {unit_heading(row['unit'])}</span><strong>{fmt_amount(row['logged_mg'], row['unit'])}</strong></div>
+            <div class="metric"><span>Adjusted {unit_heading(row['unit'])}</span><strong>{fmt_amount(row['adjustment_mg'], row['unit'])}</strong></div>
+            <div class="metric"><span>Total {unit_heading(row['unit'])}</span><strong>{fmt_amount(row['total_mg'], row['unit'])}</strong></div>
           </div>
           <div class="runway">
             <div class="runway-head">
@@ -507,7 +586,7 @@ def render_home(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
       <div>
         <p class="eyebrow">At a glance</p>
         <h2>{len(rows)} tracked peptides</h2>
-        <p class="meta">{fmt_mg(total_remaining)} physical stock on hand. Dose logs are used only for forecasting.</p>
+        <p class="meta">{stock_summary} physical stock on hand. Dose logs are used only for forecasting.</p>
         <div class="health-summary">{summary}</div>
       </div>
       <a class="button" href="/inventory">Manage inventory</a>
@@ -536,7 +615,7 @@ def render_inventory(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
         f"""
         <article class="item">
           <div class="item-title">
-            <div><h3>{h(row['peptide_name'])}</h3><p class="meta">{fmt_num(row['vials_available'])} of {fmt_num(row['vial_count'])} vials on hand · {fmt_num(row['mg_per_vial'])} mg/vial · added {h(row['added_at'])}</p></div>
+            <div><h3>{h(row['peptide_name'])}</h3><p class="meta">{fmt_num(row['vials_available'])} of {fmt_num(row['vial_count'])} vials on hand · {fmt_num(row['mg_per_vial'])} {unit_label(row['unit'])}/vial{f" · vendor {h(row['vendor_name'])}" if row['vendor_name'] else ""}{f" · batch {h(row['batch_date'])}" if row['batch_date'] else ""}{f" · expires {h(row['expiry_date'])}" if row['expiry_date'] else ""} · added {h(row['added_at'])}</p></div>
           </div>
           <p class="meta">{h(row['notes'])}</p>
           <div class="button-row">
@@ -560,7 +639,7 @@ def render_inventory(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
     adjustment_html = "".join(
         f"""
         <article class="item">
-          <h3>{h(row['peptide_name'])}: {fmt_mg(float(row['amount_mg']))}</h3>
+          <h3>{h(row['peptide_name'])}: {fmt_amount(float(row['amount_mg']), row['unit'])}</h3>
           <p class="meta">{h(row['reason'])} · {h(row['created_at'])}</p>
           <p class="meta">{h(row['notes'])}</p>
         </article>
@@ -585,8 +664,14 @@ def render_inventory(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
             </select>
           </label>
           <label>Or add new peptide <input name="peptide_name_other" placeholder="New peptide name"></label>
+          <label>Vendor name <input name="vendor_name" placeholder="WanShun, Peptide Lab..."></label>
           <label>Vials on hand <input name="vial_count" type="number" step="0.01" min="0" required></label>
-          <label>MG per vial <input name="mg_per_vial" type="number" step="0.01" min="0" required></label>
+          <label>Strength per vial <input name="mg_per_vial" type="number" step="0.01" min="0" required></label>
+          <label>Unit
+            <select name="unit"><option value="mg">mg</option><option value="iu">IU</option></select>
+          </label>
+          <label>Batch date <input name="batch_date" type="date"></label>
+          <label>Expiry date <input name="expiry_date" type="date"></label>
           <label>Date added <input name="added_at" type="date" value="{datetime.now(app_timezone()).date().isoformat()}"></label>
           <label>Notes <input name="notes" placeholder="optional"></label>
         </div>
@@ -602,7 +687,10 @@ def render_inventory(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
               {peptide_options(conn)}
             </select>
           </label>
-          <label>Amount MG <input name="amount_mg" type="number" step="0.01" placeholder="-5 or 5" required></label>
+          <label>Amount <input name="amount_mg" type="number" step="0.01" placeholder="-5 or 5" required></label>
+          <label>Unit
+            <select name="unit"><option value="mg">mg</option><option value="iu">IU</option></select>
+          </label>
           <label>Reason <input name="reason" placeholder="waste, correction, found vial..." required></label>
           <label>Notes <input name="notes" placeholder="optional"></label>
         </div>
@@ -651,7 +739,7 @@ def render_vial_view(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
               <span class="color-swatch" style="--swatch-color: {h(row['color'])}" aria-hidden="true"></span>
               <div>
                 <h3>{h(row['name'])}</h3>
-                <p class="meta">{fmt_mg(row['remaining_mg'])} on hand</p>
+                <p class="meta">{fmt_amount(row['remaining_mg'], row['unit'])} on hand</p>
               </div>
             </div>
             <strong class="vial-count">{fmt_num(row['remaining_vials'])} vial{'s' if row['remaining_vials'] != 1 else ''}</strong>
@@ -761,8 +849,8 @@ def render_log(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
           <div class="event-grid">
             <div class="metric"><span>Lot</span><strong>{h(row['lot_id'] or 'n/a')}</strong></div>
             <div class="metric"><span>Vials</span><strong>{fmt_num(float(row['quantity_vials'] or 0))}</strong></div>
-            <div class="metric"><span>MG / vial</span><strong>{fmt_mg(float(row['mg_per_vial'] or 0))}</strong></div>
-            <div class="metric"><span>Total MG</span><strong>{fmt_mg(float(row['amount_mg'] or 0))}</strong></div>
+            <div class="metric"><span>{unit_heading(row['unit'])} / vial</span><strong>{fmt_amount(float(row['mg_per_vial'] or 0), row['unit'])}</strong></div>
+            <div class="metric"><span>Total {unit_heading(row['unit'])}</span><strong>{fmt_amount(float(row['amount_mg'] or 0), row['unit'])}</strong></div>
           </div>
           <p class="meta">{h(row['reason'] or '')}</p>
           <p class="meta">{h(row['notes'] or '')}</p>
@@ -915,19 +1003,25 @@ class App(BaseHTTPRequestHandler):
         if code_data:
             peptide_name = str(code_data["name"])
         ensure_peptide(conn, peptide_name, "Added from inventory app.")
+        unit = normalize_unit(code_data.get("unit", "mg") if code_data else data.get("unit", "mg"))
+        ensure_peptide_unit(conn, peptide_name, unit)
         vial_count = safe_number(data.get("vial_count", ""), "Vials on hand")
-        mg_per_vial = float(code_data["mg_per_vial"]) if code_data else safe_number(data.get("mg_per_vial", ""), "MG per vial")
+        mg_per_vial = float(code_data["mg_per_vial"]) if code_data else safe_number(data.get("mg_per_vial", ""), "Strength per vial")
         added_at = (data.get("added_at") or datetime.now(app_timezone()).date().isoformat()).strip()
+        vendor_name = data.get("vendor_name", "").strip()
+        batch_date = data.get("batch_date", "").strip()
+        expiry_date = data.get("expiry_date", "").strip()
         notes = data.get("notes", "").strip()
         if code_data:
             code_note = f"Supplier code {code_data['code']}"
             notes = f"{code_note}. {notes}" if notes else code_note
         cursor = conn.execute(
             """
-            INSERT INTO inventory_lots (peptide_name, vial_count, mg_per_vial, added_at, notes, created_by, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO inventory_lots
+              (peptide_name, vial_count, mg_per_vial, unit, vendor_name, batch_date, expiry_date, added_at, notes, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (peptide_name, vial_count, mg_per_vial, added_at, notes, user_id, now_iso()),
+            (peptide_name, vial_count, mg_per_vial, unit, vendor_name, batch_date, expiry_date, added_at, notes, user_id, now_iso()),
         )
         self.record_event(
             conn,
@@ -938,6 +1032,7 @@ class App(BaseHTTPRequestHandler):
             vial_count,
             mg_per_vial,
             vial_count * mg_per_vial,
+            unit,
             "Inventory lot added",
             notes,
         )
@@ -947,15 +1042,17 @@ class App(BaseHTTPRequestHandler):
         if not peptide_name:
             raise ValueError("Peptide is required.")
         amount_mg = float(data.get("amount_mg", ""))
+        unit = normalize_unit(data.get("unit", "mg"))
+        ensure_peptide_unit(conn, peptide_name, unit)
         reason = data.get("reason", "").strip()
         if not reason:
             raise ValueError("Reason is required.")
         conn.execute(
             """
-            INSERT INTO inventory_adjustments (peptide_name, amount_mg, reason, notes, created_by, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO inventory_adjustments (peptide_name, amount_mg, unit, reason, notes, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (peptide_name, amount_mg, reason, data.get("notes", "").strip(), user_id, now_iso()),
+            (peptide_name, amount_mg, unit, reason, data.get("notes", "").strip(), user_id, now_iso()),
         )
         self.record_event(
             conn,
@@ -966,6 +1063,7 @@ class App(BaseHTTPRequestHandler):
             0,
             0,
             amount_mg,
+            unit,
             reason,
             data.get("notes", "").strip(),
         )
@@ -974,7 +1072,7 @@ class App(BaseHTTPRequestHandler):
         lot = one(
             conn,
             """
-            SELECT id, peptide_name, vial_count, mg_per_vial, COALESCE(vials_used, 0) AS vials_used, notes
+            SELECT id, peptide_name, vial_count, mg_per_vial, unit, COALESCE(vials_used, 0) AS vials_used, notes
             FROM inventory_lots
             WHERE id = ?
             """,
@@ -1002,6 +1100,7 @@ class App(BaseHTTPRequestHandler):
             abs(delta),
             mg_per_vial,
             abs(delta) * mg_per_vial,
+            normalize_unit(lot["unit"]),
             reason,
             lot["notes"] or "",
         )
@@ -1010,7 +1109,7 @@ class App(BaseHTTPRequestHandler):
         lot = one(
             conn,
             """
-            SELECT id, peptide_name, vial_count, mg_per_vial, COALESCE(vials_used, 0) AS vials_used, notes
+            SELECT id, peptide_name, vial_count, mg_per_vial, unit, COALESCE(vials_used, 0) AS vials_used, notes
             FROM inventory_lots
             WHERE id = ?
             """,
@@ -1029,6 +1128,7 @@ class App(BaseHTTPRequestHandler):
             remaining_vials,
             mg_per_vial,
             remaining_vials * mg_per_vial,
+            normalize_unit(lot["unit"]),
             "Inventory lot deleted",
             lot["notes"] or "",
         )
@@ -1044,16 +1144,17 @@ class App(BaseHTTPRequestHandler):
         quantity_vials: float,
         mg_per_vial: float,
         amount_mg: float,
+        unit: str,
         reason: str,
         notes: str,
     ) -> None:
         conn.execute(
             """
             INSERT INTO inventory_events
-              (event_type, lot_id, peptide_name, quantity_vials, mg_per_vial, amount_mg, reason, notes, created_by, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              (event_type, lot_id, peptide_name, quantity_vials, mg_per_vial, amount_mg, unit, reason, notes, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (event_type, lot_id, peptide_name, quantity_vials, mg_per_vial, amount_mg, reason, notes, user_id, now_iso()),
+            (event_type, lot_id, peptide_name, quantity_vials, mg_per_vial, amount_mg, unit, reason, notes, user_id, now_iso()),
         )
 
     def serve_static(self, path: Path) -> None:

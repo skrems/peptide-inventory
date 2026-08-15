@@ -107,6 +107,7 @@ SUPPLIER_CODES: dict[str, dict[str, float | int | str]] = {
     "AP5": {"name": "Adipotide", "mg_per_vial": 5, "vials_per_pack": 10},
     "G5K": {"name": "HCG", "mg_per_vial": 5000, "vials_per_pack": 10, "unit": "iu"},
     "G10K": {"name": "HCG", "mg_per_vial": 10000, "vials_per_pack": 10, "unit": "iu"},
+    "H36": {"name": "HGH", "mg_per_vial": 36, "vials_per_pack": 10, "unit": "iu"},
     "MZ10": {"name": "Mazdutide", "mg_per_vial": 10, "vials_per_pack": 10},
     "SUR10": {"name": "Survodutide", "mg_per_vial": 10, "vials_per_pack": 10},
     "CS5": {"name": "Cagrilintide + Semaglutide", "mg_per_vial": 5, "vials_per_pack": 10},

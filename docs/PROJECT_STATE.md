@@ -37,6 +37,8 @@ inventory_adjustments
 - Adding a new peptide while adding inventory writes to the shared `peptides` table.
 - Peptide Power dropdowns will then include that peptide.
 - WanShun supplier codes are available for inventory entry, for example `SK10` becomes Selank 10 mg per vial.
+- Inventory lots can record an optional free-text vendor name, which is shown with the lot details.
+- Inventory strengths and audit events support mg or IU, and lot forms include batch and expiry dates.
 - Inventory is a physical vial ledger. Dose logs do not automatically deplete inventory.
 - Marking a vial as used/reconstituted removes one vial from stock.
 - Peptide Power dose logs are used for runway/reorder forecasting after inventory tracking starts for that peptide.
