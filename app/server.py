@@ -5,7 +5,6 @@ import hmac
 import json
 import mimetypes
 import os
-import re
 import secrets
 import sqlite3
 import sys
@@ -23,7 +22,7 @@ from app.supplier_codes import SUPPLIER_CODES, supplier_lookup
 
 
 APP_NAME = "Peptide Inventory"
-APP_VERSION = "v1.6"
+APP_VERSION = "v1.7"
 ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = ROOT / "static"
 DB_PATH = Path(os.environ.get("INVENTORY_DB", ROOT / "data" / "app.db"))
@@ -33,6 +32,41 @@ SECRET = os.environ.get("INVENTORY_SECRET", secrets.token_hex(32))
 APP_TIMEZONE_NAME = os.environ.get("INVENTORY_TIMEZONE", os.environ.get("TZ", "America/Los_Angeles"))
 
 SESSIONS: dict[str, int] = {}
+
+VIAL_COLOR_PALETTE = (
+    "#E53935",  # red
+    "#1E88E5",  # blue
+    "#43A047",  # green
+    "#8E24AA",  # purple
+    "#FB8C00",  # orange
+    "#00ACC1",  # cyan
+    "#D81B60",  # magenta
+    "#7CB342",  # lime
+    "#5E35B1",  # deep purple
+    "#00897B",  # teal
+    "#FDD835",  # yellow
+    "#6D4C41",  # brown
+    "#3949AB",  # indigo
+    "#C0CA33",  # yellow-green
+    "#F4511E",  # deep orange
+    "#039BE5",  # light blue
+    "#AD1457",  # dark pink
+    "#2E7D32",  # dark green
+    "#EF6C00",  # dark orange
+    "#6A1B9A",  # dark violet
+    "#00838F",  # dark cyan
+    "#C62828",  # dark red
+    "#1565C0",  # dark blue
+    "#9E9D24",  # olive
+    "#EC407A",  # pink
+    "#26A69A",  # mint teal
+    "#7E57C2",  # lavender
+    "#66BB6A",  # light green
+    "#FFA726",  # light orange
+    "#29B6F6",  # sky blue
+    "#AB47BC",  # violet
+    "#78909C",  # blue gray
+)
 
 
 @dataclass
@@ -231,13 +265,22 @@ def ensure_peptide_unit(conn: sqlite3.Connection, name: str, unit: str) -> None:
         raise ValueError(f"{name} already uses {existing}; units cannot be mixed for one peptide.")
 
 
+def vial_color_map(names: list[str]) -> dict[str, str]:
+    """Assign distinct inventory-only colors without changing shared peptide records."""
+    ordered_names = sorted(set(names), key=str.casefold)
+    return {
+        name: VIAL_COLOR_PALETTE[index % len(VIAL_COLOR_PALETTE)]
+        for index, name in enumerate(ordered_names)
+    }
+
+
 def inventory_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     catalog = peptide_catalog(conn)
     peptides = [row["name"] for row in catalog]
-    peptide_colors = {row["name"]: row["color"] for row in catalog}
     lot_names = [row["peptide_name"] for row in query(conn, "SELECT DISTINCT peptide_name FROM inventory_lots")]
     adj_names = [row["peptide_name"] for row in query(conn, "SELECT DISTINCT peptide_name FROM inventory_adjustments")]
     names = sorted({*peptides, *lot_names, *adj_names}, key=str.lower)
+    peptide_colors = vial_color_map(names)
     rows: list[dict[str, Any]] = []
     for name in names:
         unit_row = one(
@@ -322,7 +365,7 @@ def inventory_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             {
                 "name": name,
                 "unit": unit,
-                "color": safe_color(peptide_colors.get(name)),
+                "color": peptide_colors[name],
                 "total_mg": remaining_mg,
                 "total_added_mg": total_added_mg,
                 "logged_mg": logged_mg,
@@ -338,11 +381,6 @@ def inventory_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             }
         )
     return rows
-
-
-def safe_color(value: Any) -> str:
-    color = str(value or "").strip()
-    return color if re.fullmatch(r"#[0-9a-fA-F]{6}", color) else "#60706a"
 
 
 def fmt_mg(value: float) -> str:

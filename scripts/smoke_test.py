@@ -21,6 +21,9 @@ ROOT = Path(__file__).resolve().parent.parent
 ADMIN_EMAIL = "admin@example.local"
 ADMIN_PASSWORD = "change-me-now"
 
+sys.path.insert(0, str(ROOT))
+from app.server import VIAL_COLOR_PALETTE, vial_color_map  # noqa: E402
+
 
 def password_hash(password: str) -> str:
     salt = secrets.token_hex(16)
@@ -138,6 +141,13 @@ def wait_for_server(client: Client, proc: subprocess.Popen[str]) -> None:
 
 
 def main() -> int:
+    sample_names = [f"Peptide {index:02d}" for index in range(len(VIAL_COLOR_PALETTE))]
+    sample_colors = vial_color_map(sample_names)
+    if len(set(sample_colors.values())) != len(sample_names):
+        raise AssertionError("vial color palette must remain distinct")
+    if "#60706a" in {color.lower() for color in sample_colors.values()}:
+        raise AssertionError("legacy default gray must not be used in the vial palette")
+
     port = free_port()
     db_path = Path(tempfile.gettempdir()) / f"peptide-inventory-smoke-{port}.db"
     db_path.unlink(missing_ok=True)
@@ -165,7 +175,7 @@ def main() -> int:
         require(login, "SS-31")
         require(login, "tracked peptides")
         require(login, "Log")
-        require(login, "Version v1.6")
+        require(login, "Version v1.7")
 
         inventory = client.get("/inventory")
         require(inventory, "Add inventory")
