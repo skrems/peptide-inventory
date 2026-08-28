@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-SUPPLIER_CODES: dict[str, dict[str, float | int | str]] = {
+SUPPLIER_CODES: dict[str, dict[str, object]] = {
     "SM5": {"name": "Semaglutide", "mg_per_vial": 5, "vials_per_pack": 10},
     "SM10": {"name": "Semaglutide", "mg_per_vial": 10, "vials_per_pack": 10},
     "SM15": {"name": "Semaglutide", "mg_per_vial": 15, "vials_per_pack": 10},
@@ -55,8 +55,18 @@ SUPPLIER_CODES: dict[str, dict[str, float | int | str]] = {
     "SMO10": {"name": "Sermorelin Acetate", "mg_per_vial": 10, "vials_per_pack": 10},
     "KS5": {"name": "Kisspeptin-10", "mg_per_vial": 5, "vials_per_pack": 10},
     "KS10": {"name": "Kisspeptin-10", "mg_per_vial": 10, "vials_per_pack": 10},
-    "BB10": {"name": "BPC-157 + TB-500", "mg_per_vial": 10, "vials_per_pack": 10},
-    "BB20": {"name": "BPC-157 + TB-500", "mg_per_vial": 20, "vials_per_pack": 10},
+    "BB10": {
+        "name": "BPC-157 + TB-500",
+        "mg_per_vial": 10,
+        "vials_per_pack": 10,
+        "components": {"BPC-157": 5, "TB-500": 5},
+    },
+    "BB20": {
+        "name": "BPC-157 + TB-500",
+        "mg_per_vial": 20,
+        "vials_per_pack": 10,
+        "components": {"BPC-157": 10, "TB-500": 10},
+    },
     "KPV5": {"name": "KPV", "mg_per_vial": 5, "vials_per_pack": 10},
     "KPV10": {"name": "KPV", "mg_per_vial": 10, "vials_per_pack": 10},
     "VIP5": {"name": "VIP", "mg_per_vial": 5, "vials_per_pack": 10},
@@ -115,7 +125,7 @@ SUPPLIER_CODES: dict[str, dict[str, float | int | str]] = {
 }
 
 
-def supplier_lookup(raw_code: str) -> dict[str, float | int | str] | None:
+def supplier_lookup(raw_code: str) -> dict[str, object] | None:
     code = raw_code.strip().upper().replace(" ", "")
     if code in {"柠檬瓶", "LEMONBOTTLE"}:
         code = "LEMON"

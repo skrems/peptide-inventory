@@ -16,6 +16,10 @@ Every inventory lot and event carries `mg` or `IU`. A peptide cannot mix units b
 
 The vial views use a deterministic high-contrast palette instead of shared `peptides.color` values. This keeps each inventory group distinct without changing colors used by Peptide Power.
 
+## Blend Strength Variants
+
+Physical vial views separate supplier-code and strength variants while dashboard forecasting remains grouped by the shared peptide name. Ingredient contents are supplier-code metadata, and existing lots recover their code from the audit note written when the lot was added. This distinguishes BB10 from BB20 without duplicating shared peptides or dose-log history.
+
 ## Versioned ZimaOS Releases
 
 Production uses explicit GHCR `vX.Y` tags on `linux/amd64`. The application version, compose image, Git tag, documentation, and visible version badge move together.

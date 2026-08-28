@@ -175,7 +175,7 @@ def main() -> int:
         require(login, "SS-31")
         require(login, "tracked peptides")
         require(login, "Log")
-        require(login, "Version v1.7")
+        require(login, "Version v1.8")
 
         inventory = client.get("/inventory")
         require(inventory, "Add inventory")
@@ -183,6 +183,10 @@ def main() -> int:
         require(inventory, "Supplier code")
         require(inventory, "SK10")
         require(inventory, "H36")
+        require(inventory, "BB10")
+        require(inventory, "BB20")
+        require(inventory, "5 mg BPC-157 + 5 mg TB-500")
+        require(inventory, "10 mg BPC-157 + 10 mg TB-500")
         require(inventory, "Vendor name")
         require(inventory, "Batch date")
         require(inventory, "Expiry date")
@@ -316,6 +320,40 @@ def main() -> int:
                 raise AssertionError("supplier code did not create the expected Selank lot")
             if lot[4] != "WanShun Peptide":
                 raise AssertionError("supplier code lot vendor was not stored")
+
+        for supplier_code in ("BB10", "BB20"):
+            client.post(
+                "/lots",
+                {
+                    "supplier_code": supplier_code,
+                    "peptide_name": "",
+                    "peptide_name_other": "",
+                    "vendor_name": "Blend Vendor",
+                    "unit": "mg",
+                    "vial_count": "1",
+                    "mg_per_vial": "",
+                    "added_at": "2026-06-14",
+                    "notes": "blend strength smoke",
+                },
+            )
+        home = client.get("/")
+        require(home, "30 mg combined blend on hand")
+        require(home, "Combined MG")
+        require(home, "BB10")
+        require(home, "5 mg BPC-157 + 5 mg TB-500 per vial")
+        require(home, "BB20")
+        require(home, "10 mg BPC-157 + 10 mg TB-500 per vial")
+        inventory = client.get("/inventory")
+        require(inventory, "BB10 · BPC-157 + TB-500")
+        require(inventory, "BB20 · BPC-157 + TB-500")
+        require(inventory, "10 mg combined")
+        require(inventory, "20 mg combined")
+        vials = client.get("/vials")
+        require(vials, "BB10 · BPC-157 + TB-500")
+        require(vials, "BB20 · BPC-157 + TB-500")
+        one_k = client.get("/one-k")
+        require(one_k, "BB10 · BPC-157 + TB-500")
+        require(one_k, "BB20 · BPC-157 + TB-500")
 
         client.post(
             "/lots",

@@ -5,6 +5,7 @@ import hmac
 import json
 import mimetypes
 import os
+import re
 import secrets
 import sqlite3
 import sys
@@ -22,7 +23,7 @@ from app.supplier_codes import SUPPLIER_CODES, supplier_lookup
 
 
 APP_NAME = "Peptide Inventory"
-APP_VERSION = "v1.7"
+APP_VERSION = "v1.8"
 ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = ROOT / "static"
 DB_PATH = Path(os.environ.get("INVENTORY_DB", ROOT / "data" / "app.db"))
@@ -274,6 +275,65 @@ def vial_color_map(names: list[str]) -> dict[str, str]:
     }
 
 
+SUPPLIER_CODE_RE = re.compile(r"\bSupplier code\s+([A-Z0-9]+)\b", re.IGNORECASE)
+
+
+def supplier_code_from_notes(notes: Any) -> str:
+    match = SUPPLIER_CODE_RE.search(str(notes or ""))
+    return match.group(1).upper() if match else ""
+
+
+def supplier_components(code: str) -> list[tuple[str, float]]:
+    code_data = supplier_lookup(code)
+    components = code_data.get("components") if code_data else None
+    if not isinstance(components, dict):
+        return []
+    return [(str(name), float(amount)) for name, amount in components.items()]
+
+
+def physical_stock_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Return physical vial stock separated by supplier code and vial strength."""
+    grouped: dict[tuple[str, str, str, float], dict[str, Any]] = {}
+    for lot in query(
+        conn,
+        """
+        SELECT peptide_name, vial_count, mg_per_vial, unit, COALESCE(vials_used, 0) AS vials_used, notes
+        FROM inventory_lots
+        WHERE vial_count > COALESCE(vials_used, 0)
+        ORDER BY added_at, id
+        """,
+    ):
+        unit = normalize_unit(lot["unit"])
+        strength = float(lot["mg_per_vial"])
+        code = supplier_code_from_notes(lot["notes"])
+        key = (lot["peptide_name"], unit, code, strength)
+        row = grouped.setdefault(
+            key,
+            {
+                "name": lot["peptide_name"],
+                "unit": unit,
+                "code": code,
+                "mg_per_vial": strength,
+                "remaining_vials": 0.0,
+                "remaining_mg": 0.0,
+                "components": supplier_components(code),
+            },
+        )
+        available = max(float(lot["vial_count"]) - float(lot["vials_used"]), 0)
+        row["remaining_vials"] += available
+        row["remaining_mg"] += available * strength
+
+    rows = list(grouped.values())
+    for row in rows:
+        row["display_name"] = (
+            f"{row['code']} · {row['name']}" if row["code"] else f"{row['name']} · {fmt_amount(row['mg_per_vial'], row['unit'])}/vial"
+        )
+    colors = vial_color_map([row["display_name"] for row in rows])
+    for row in rows:
+        row["color"] = colors[row["display_name"]]
+    return sorted(rows, key=lambda row: (row["name"].casefold(), row["mg_per_vial"], row["code"]))
+
+
 def inventory_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     catalog = peptide_catalog(conn)
     peptides = [row["name"] for row in catalog]
@@ -281,6 +341,7 @@ def inventory_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     adj_names = [row["peptide_name"] for row in query(conn, "SELECT DISTINCT peptide_name FROM inventory_adjustments")]
     names = sorted({*peptides, *lot_names, *adj_names}, key=str.lower)
     peptide_colors = vial_color_map(names)
+    stock_variants = physical_stock_rows(conn)
     rows: list[dict[str, Any]] = []
     for name in names:
         unit_row = one(
@@ -378,6 +439,11 @@ def inventory_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                 "remaining_vials": remaining_vials,
                 "projected_days": projected_days,
                 "inventory_started_at": inventory_started_at,
+                "variants": [
+                    variant
+                    for variant in stock_variants
+                    if variant["name"] == name and variant["unit"] == unit
+                ],
             }
         )
     return rows
@@ -411,6 +477,66 @@ def fmt_num(value: float | None) -> str:
     if value is None:
         return "n/a"
     return f"{value:,.2f}".rstrip("0").rstrip(".")
+
+
+def variant_per_vial_text(row: dict[str, Any]) -> str:
+    components = row.get("components") or []
+    if components:
+        return " + ".join(f"{fmt_num(amount)} mg {name}" for name, amount in components) + " per vial"
+    return f"{fmt_amount(row['mg_per_vial'], row['unit'])} per vial"
+
+
+def variant_on_hand_text(row: dict[str, Any]) -> str:
+    components = row.get("components") or []
+    if components:
+        return " + ".join(
+            f"{fmt_num(amount * row['remaining_vials'])} mg {name}"
+            for name, amount in components
+        ) + " on hand"
+    return f"{fmt_amount(row['remaining_mg'], row['unit'])} on hand"
+
+
+def inventory_variant_html(variants: list[dict[str, Any]]) -> str:
+    if not variants:
+        return ""
+    items = "".join(
+        f"""
+        <div class="strength-variant">
+          <strong>{h(row['code'] or fmt_amount(row['mg_per_vial'], row['unit']))}</strong>
+          <span>{h(variant_per_vial_text(row))}</span>
+          <span>{fmt_num(row['remaining_vials'])} vial{'s' if row['remaining_vials'] != 1 else ''} · {h(variant_on_hand_text(row))}</span>
+        </div>
+        """
+        for row in variants
+    )
+    return f'<div class="strength-breakdown"><span class="strength-title">Vial strengths</span>{items}</div>'
+
+
+def has_component_breakdown(row: dict[str, Any]) -> bool:
+    return any(variant.get("components") for variant in row.get("variants", []))
+
+
+def inventory_on_hand_text(row: dict[str, Any]) -> str:
+    qualifier = " combined blend" if has_component_breakdown(row) else ""
+    return f"{fmt_amount(row['remaining_mg'], row['unit'])}{qualifier} on hand"
+
+
+def lot_code(row: sqlite3.Row) -> str:
+    return supplier_code_from_notes(row["notes"])
+
+
+def lot_heading(row: sqlite3.Row) -> str:
+    code = lot_code(row)
+    return f"{code} · {row['peptide_name']}" if code else str(row["peptide_name"])
+
+
+def lot_strength_text(row: sqlite3.Row) -> str:
+    code = lot_code(row)
+    components = supplier_components(code)
+    if components:
+        component_text = " + ".join(f"{fmt_num(amount)} mg {name}" for name, amount in components)
+        return f"{component_text} per vial · {fmt_amount(float(row['mg_per_vial']), row['unit'])} combined"
+    return f"{fmt_amount(float(row['mg_per_vial']), row['unit'])}/vial"
 
 
 def health_state(row: dict[str, Any]) -> str:
@@ -469,9 +595,18 @@ def peptide_options(conn: sqlite3.Connection, selected: str = "") -> str:
     return "\n".join(options)
 
 
+def supplier_code_option_text(code: str, data: dict[str, object]) -> str:
+    components = supplier_components(code)
+    unit = str(data.get("unit", "mg"))
+    if components:
+        contents = " + ".join(f"{fmt_num(amount)} mg {name}" for name, amount in components)
+        return f"{contents} · {fmt_num(float(data['mg_per_vial']))} {unit} combined/vial · {data['vials_per_pack']} pack"
+    return f"{data['name']} · {fmt_num(float(data['mg_per_vial']))} {unit}/vial · {data['vials_per_pack']} pack"
+
+
 def supplier_code_options() -> str:
     return "\n".join(
-        f'<option value="{h(code)}">{h(data["name"])} · {fmt_num(float(data["mg_per_vial"]))} {h(data.get("unit", "mg"))}/vial · {h(data["vials_per_pack"])} pack</option>'
+        f'<option value="{h(code)}">{h(supplier_code_option_text(code, data))}</option>'
         for code, data in sorted(SUPPLIER_CODES.items())
     )
 
@@ -594,14 +729,15 @@ def render_home(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
           <div class="inventory-row">
             <div class="inventory-peptide">
               <h3>{h(row['name'])}</h3>
-              <p class="meta">{fmt_amount(row['remaining_mg'], row['unit'])} on hand · {row['dose_logs']} forecast dose logs{forecast_text(row)}</p>
+              <p class="meta">{h(inventory_on_hand_text(row))} · {row['dose_logs']} forecast dose logs{forecast_text(row)}</p>
             </div>
             <div class="metric"><span>Vials on hand</span><strong>{fmt_num(row['remaining_vials'])}</strong></div>
             <div class="metric"><span>Vials used</span><strong>{fmt_num(row['vials_used'])}</strong></div>
             <div class="metric"><span>Logged {unit_heading(row['unit'])}</span><strong>{fmt_amount(row['logged_mg'], row['unit'])}</strong></div>
             <div class="metric"><span>Adjusted {unit_heading(row['unit'])}</span><strong>{fmt_amount(row['adjustment_mg'], row['unit'])}</strong></div>
-            <div class="metric"><span>Total {unit_heading(row['unit'])}</span><strong>{fmt_amount(row['total_mg'], row['unit'])}</strong></div>
+            <div class="metric"><span>{'Combined ' if has_component_breakdown(row) else 'Total '}{unit_heading(row['unit'])}</span><strong>{fmt_amount(row['total_mg'], row['unit'])}</strong></div>
           </div>
+          {inventory_variant_html(row['variants'])}
           <div class="runway">
             <div class="runway-head">
               <span class="badge {health_state(row)}">{health_label(health_state(row))}</span>
@@ -654,7 +790,7 @@ def render_inventory(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
         f"""
         <article class="item">
           <div class="item-title">
-            <div><h3>{h(row['peptide_name'])}</h3><p class="meta">{fmt_num(row['vials_available'])} of {fmt_num(row['vial_count'])} vials on hand · {fmt_num(row['mg_per_vial'])} {unit_label(row['unit'])}/vial{f" · vendor {h(row['vendor_name'])}" if row['vendor_name'] else ""}{f" · batch {h(row['batch_date'])}" if row['batch_date'] else ""}{f" · expires {h(row['expiry_date'])}" if row['expiry_date'] else ""} · added {h(row['added_at'])}</p></div>
+            <div><h3>{h(lot_heading(row))}</h3><p class="meta">{fmt_num(row['vials_available'])} of {fmt_num(row['vial_count'])} vials on hand · {h(lot_strength_text(row))}{f" · vendor {h(row['vendor_name'])}" if row['vendor_name'] else ""}{f" · batch {h(row['batch_date'])}" if row['batch_date'] else ""}{f" · expires {h(row['expiry_date'])}" if row['expiry_date'] else ""} · added {h(row['added_at'])}</p></div>
           </div>
           <p class="meta">{h(row['notes'])}</p>
           <div class="button-row">
@@ -767,7 +903,7 @@ def vial_markers(row: dict[str, Any]) -> str:
 
 
 def render_vial_view(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
-    stock_rows = [row for row in inventory_rows(conn) if row["remaining_vials"] > 0]
+    stock_rows = physical_stock_rows(conn)
     total_vials = sum(row["remaining_vials"] for row in stock_rows)
 
     groups = "".join(
@@ -777,13 +913,13 @@ def render_vial_view(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
             <div class="vial-name">
               <span class="color-swatch" style="--swatch-color: {h(row['color'])}" aria-hidden="true"></span>
               <div>
-                <h3>{h(row['name'])}</h3>
-                <p class="meta">{fmt_amount(row['remaining_mg'], row['unit'])} on hand</p>
+                <h3>{h(row['display_name'])}</h3>
+                <p class="meta">{h(variant_per_vial_text(row))} · {h(variant_on_hand_text(row))}</p>
               </div>
             </div>
             <strong class="vial-count">{fmt_num(row['remaining_vials'])} vial{'s' if row['remaining_vials'] != 1 else ''}</strong>
           </div>
-          <div class="vial-grid" aria-label="{h(row['name'])}: {fmt_num(row['remaining_vials'])} vials on hand">
+          <div class="vial-grid" aria-label="{h(row['display_name'])}: {fmt_num(row['remaining_vials'])} vials on hand">
             {vial_markers(row)}
           </div>
         </article>
@@ -803,7 +939,7 @@ def render_vial_view(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
       <div class="panel-head">
         <div>
           <h2>Vial view</h2>
-          <p class="meta">A visual count of your physical stock, grouped by peptide.</p>
+          <p class="meta">A visual count of your physical stock, separated by peptide, supplier code, and vial strength.</p>
         </div>
       </div>
       <div class="vial-list">{groups}</div>
@@ -814,8 +950,8 @@ def render_vial_view(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
 
 def render_one_k_view(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
     stock_rows = sorted(
-        (row for row in inventory_rows(conn) if row["remaining_vials"] > 0),
-        key=lambda row: row["name"].lower(),
+        physical_stock_rows(conn),
+        key=lambda row: row["display_name"].lower(),
     )
     total_vials = sum(row["remaining_vials"] for row in stock_rows)
     all_markers = "".join(vial_markers(row) for row in stock_rows)
@@ -823,7 +959,7 @@ def render_one_k_view(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
         f"""
         <div class="vial-legend-item">
           <span class="color-swatch" style="--swatch-color: {h(row['color'])}" aria-hidden="true"></span>
-          <span>{h(row['name'])}</span>
+          <span>{h(row['display_name'])}</span>
           <strong>{fmt_num(row['remaining_vials'])}</strong>
         </div>
         """
@@ -842,10 +978,10 @@ def render_one_k_view(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
       <div class="panel-head">
         <div>
           <h2>All physical stock</h2>
-          <p class="meta">{len(stock_rows)} peptides currently have vials on hand.</p>
+          <p class="meta">{len(stock_rows)} peptide-strength groups currently have vials on hand.</p>
         </div>
       </div>
-      <div class="vial-mosaic" aria-label="{fmt_num(total_vials)} vials currently on hand across {len(stock_rows)} peptides">
+      <div class="vial-mosaic" aria-label="{fmt_num(total_vials)} vials currently on hand across {len(stock_rows)} peptide-strength groups">
         {all_markers}
       </div>
       <div class="vial-legend" aria-label="Vial color legend">{legend}</div>
