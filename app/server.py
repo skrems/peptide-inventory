@@ -23,7 +23,7 @@ from app.supplier_codes import SUPPLIER_CODES, supplier_lookup
 
 
 APP_NAME = "Peptide Inventory"
-APP_VERSION = "v1.8"
+APP_VERSION = "v1.9"
 ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = ROOT / "static"
 DB_PATH = Path(os.environ.get("INVENTORY_DB", ROOT / "data" / "app.db"))
@@ -653,6 +653,7 @@ def layout(ctx: RequestContext, title: str, body: str, active: str = "/") -> byt
           {nav_item("/", "Dashboard", active)}
           {nav_item("/inventory", "Manage", active)}
           {nav_item("/vials", "Vial view", active)}
+          {nav_item("/stock-totals", "Stock totals", active)}
           {nav_item("/one-k", "1K foot view", active)}
           {nav_item("/log", "Log", active)}
         </nav>
@@ -948,6 +949,83 @@ def render_vial_view(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
     return layout(ctx, "Vial View", body, "/vials")
 
 
+def render_stock_totals(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
+    grouped: dict[tuple[str, str, float, tuple[tuple[str, float], ...]], dict[str, Any]] = {}
+    for stock in physical_stock_rows(conn):
+        components = tuple(sorted(stock["components"]))
+        key = (stock["name"].casefold(), stock["unit"], stock["mg_per_vial"], components)
+        row = grouped.setdefault(
+            key,
+            {
+                **stock,
+                "remaining_vials": 0.0,
+                "remaining_mg": 0.0,
+                "codes": set(),
+                "has_manual_lots": False,
+            },
+        )
+        row["remaining_vials"] += stock["remaining_vials"]
+        row["remaining_mg"] += stock["remaining_mg"]
+        if stock["code"]:
+            row["codes"].add(stock["code"])
+        else:
+            row["has_manual_lots"] = True
+    stock_rows = sorted(
+        grouped.values(),
+        key=lambda row: (row["name"].casefold(), row["mg_per_vial"], row["unit"]),
+    )
+    for row in stock_rows:
+        row["display_name"] = f"{row['name']} · {fmt_amount(row['mg_per_vial'], row['unit'])}/vial"
+        sources = sorted(row["codes"])
+        if row["has_manual_lots"]:
+            sources.append("Manual entry")
+        row["source_codes"] = ", ".join(sources) or "Manual entry"
+    total_vials = sum(row["remaining_vials"] for row in stock_rows)
+    totals_by_unit = {
+        unit: sum(row["remaining_mg"] for row in stock_rows if row["unit"] == unit)
+        for unit in ("mg", "iu")
+    }
+    contents_summary = " · ".join(
+        fmt_amount(amount, unit) for unit, amount in totals_by_unit.items() if amount
+    ) or "No stock on hand"
+    items = "".join(
+        f"""
+        <article class="stock-total-row" data-stock-product="{h(row['name'])}" data-stock-strength="{fmt_num(row['mg_per_vial'])}">
+          <div class="stock-total-ident">
+            <span class="color-swatch" style="--swatch-color: {h(row['color'])}" aria-hidden="true"></span>
+            <div>
+              <h3>{h(row['display_name'])}</h3>
+              <p class="meta">Source codes: {h(row['source_codes'])}</p>
+            </div>
+          </div>
+          <div class="metric"><span>Vials on hand</span><strong>{fmt_num(row['remaining_vials'])}</strong></div>
+          <div class="metric"><span>Total contents</span><strong>{fmt_amount(row['remaining_mg'], row['unit'])}</strong></div>
+        </article>
+        """
+        for row in stock_rows
+    ) or '<div class="empty">No physical vial stock is currently on hand.</div>'
+    body = f"""
+    <section class="panel vial-hero">
+      <div>
+        <p class="eyebrow">Combined lots</p>
+        <h2>{fmt_num(total_vials)} vials on hand</h2>
+        <p class="meta">{len(stock_rows)} product-strength groups · {h(contents_summary)}</p>
+      </div>
+      <a class="button secondary" href="/inventory">Manage inventory</a>
+    </section>
+    <section class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>Stock totals by product</h2>
+          <p class="meta">Lots with the same supplier code and vial strength are combined. Used vials are excluded.</p>
+        </div>
+      </div>
+      <div class="stock-total-list">{items}</div>
+    </section>
+    """
+    return layout(ctx, "Stock Totals", body, "/stock-totals")
+
+
 def render_one_k_view(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
     stock_rows = sorted(
         physical_stock_rows(conn),
@@ -1052,7 +1130,7 @@ class App(BaseHTTPRequestHandler):
 
     def do_HEAD(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
-        self.send_response(HTTPStatus.OK if parsed.path in {"/", "/inventory", "/vials", "/one-k", "/log", "/login", "/healthz"} else HTTPStatus.NOT_FOUND)
+        self.send_response(HTTPStatus.OK if parsed.path in {"/", "/inventory", "/vials", "/stock-totals", "/one-k", "/log", "/login", "/healthz"} else HTTPStatus.NOT_FOUND)
         self.end_headers()
 
     def do_GET(self) -> None:
@@ -1087,6 +1165,8 @@ class App(BaseHTTPRequestHandler):
                 return self.html(render_inventory(ctx, conn))
             if parsed.path == "/vials":
                 return self.html(render_vial_view(ctx, conn))
+            if parsed.path == "/stock-totals":
+                return self.html(render_stock_totals(ctx, conn))
             if parsed.path == "/one-k":
                 return self.html(render_one_k_view(ctx, conn))
             if parsed.path == "/log":

@@ -364,6 +364,38 @@ button.text {
   gap: 12px;
 }
 
+.stock-total-list {
+  display: grid;
+  gap: 8px;
+}
+
+.stock-total-row {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.7fr) repeat(2, minmax(140px, 1fr));
+  gap: 14px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfdfc;
+  padding: 14px;
+}
+
+.stock-total-ident {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.stock-total-ident h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.stock-total-ident .meta {
+  margin: 5px 0 0;
+}
+
 .vial-group {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -618,6 +650,14 @@ button.text {
   .strength-breakdown,
   .event-grid {
     grid-template-columns: 1fr;
+  }
+
+  .stock-total-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .stock-total-ident {
+    grid-column: 1 / -1;
   }
 
   .user-chip {

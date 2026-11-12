@@ -12,12 +12,14 @@ This app uses the same SQLite database as Peptide Power Assistant. It reads shar
 - Track lot strength in either mg or IU without mixing units in peptide totals.
 - Record optional batch and expiry dates on each lot.
 - Add inventory by supplier code, such as `SK10` for Selank 10 mg.
+- The `NJ1000` supplier code records the distinct product name `NAD1000`; lower-strength NAD products remain `NAD`.
 - Distinguish blend strengths by supplier code and ingredient contents; for example, BB10 is 5 mg BPC-157 + 5 mg TB-500 while BB20 is 10 mg + 10 mg per vial.
 - Add a new peptide while adding inventory.
 - New peptides are inserted into the shared `peptides` table so they appear in Peptide Power Assistant dropdowns.
 - Mark individual vials as used/reconstituted when they leave physical stock.
 - Inventory Log tab shows timestamped audit events for lots, vial use/restores, deletes, and adjustments.
 - Vial View tab visually shows each vial currently on hand, grouped by peptide with a distinct high-contrast color palette.
+- Stock Totals tab combines lots by product name and vial strength, showing total vials and total contents for each product-strength group.
 - 1K Foot View combines every on-hand vial into one continuous color-coded mosaic, with a compact matching legend for the full inventory picture.
 - Peptide Power dose logs are used for runway/reorder forecasting only; they do not automatically deplete inventory.
 - Dashboard supply-health bars show critical, low, healthy, or no-pace status at a glance.
@@ -56,6 +58,7 @@ RT10 -> Retatrutide, 10 mg per vial
 CU50 -> GHK-Cu, 50 mg per vial
 BB10 -> BPC-157 5 mg + TB-500 5 mg, 10 mg combined per vial
 BB20 -> BPC-157 10 mg + TB-500 10 mg, 20 mg combined per vial
+KLOW80 -> KLOW80, containing BPC-157 10 mg + TB-500 10 mg + GHK-Cu 50 mg + KPV 10 mg per vial
 ```
 
 Entering a code auto-fills peptide name and mg per vial in the browser. The server also validates the code, so direct form submissions work too.
@@ -107,7 +110,7 @@ That means both apps use:
 Current image tag:
 
 ```text
-ghcr.io/skrems/peptide-inventory:v1.8
+ghcr.io/skrems/peptide-inventory:v1.9
 ```
 
 Use explicit version tags on ZimaOS custom apps. Do not rely on `latest`.
@@ -135,7 +138,7 @@ git push origin <version>
 
 ```text
 Docker image: ghcr.io/skrems/peptide-inventory
-Tag: v1.8
+Tag: v1.9
 Port: 8081 -> 8081
 Volume: /DATA/AppData/peptide-power-assistant/data -> /data
 ```

@@ -175,7 +175,8 @@ def main() -> int:
         require(login, "SS-31")
         require(login, "tracked peptides")
         require(login, "Log")
-        require(login, "Version v1.8")
+        require(login, "Stock totals")
+        require(login, "Version v1.9")
 
         inventory = client.get("/inventory")
         require(inventory, "Add inventory")
@@ -354,6 +355,72 @@ def main() -> int:
         one_k = client.get("/one-k")
         require(one_k, "BB10 · BPC-157 + TB-500")
         require(one_k, "BB20 · BPC-157 + TB-500")
+
+        client.post(
+            "/lots",
+            {
+                "supplier_code": "KLOW80",
+                "peptide_name": "",
+                "peptide_name_other": "",
+                "vendor_name": "Blend Vendor",
+                "unit": "mg",
+                "vial_count": "1",
+                "mg_per_vial": "",
+                "added_at": "2026-06-14",
+                "notes": "KLOW blend smoke",
+            },
+        )
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute("SELECT name FROM peptides WHERE name = 'KLOW80'").fetchone()
+            if not row:
+                raise AssertionError("KLOW80 was not added to the shared peptide catalog by code name")
+            lot = conn.execute(
+                "SELECT peptide_name, mg_per_vial, notes FROM inventory_lots WHERE peptide_name = 'KLOW80'"
+            ).fetchone()
+            if not lot or lot[1] != 80 or "Supplier code KLOW80" not in lot[2]:
+                raise AssertionError("KLOW80 did not create the expected coded blend lot")
+        home = client.get("/")
+        require(home, "KLOW80")
+        require(home, "10 mg BPC-157 + 10 mg TB-500 + 50 mg GHK-Cu + 10 mg KPV per vial")
+
+        for supplier_code, quantities in (("RT30", (2, 3)), ("NJ1000", (1, 2))):
+            for quantity in quantities:
+                client.post(
+                    "/lots",
+                    {
+                        "supplier_code": supplier_code,
+                        "peptide_name": "",
+                        "peptide_name_other": "",
+                        "vendor_name": "Totals Smoke Vendor",
+                        "unit": "mg",
+                        "vial_count": str(quantity),
+                        "mg_per_vial": "",
+                        "added_at": "2026-06-14",
+                        "notes": "multi-lot totals smoke",
+                    },
+                )
+        client.post(
+            "/lots",
+            {
+                "supplier_code": "",
+                "peptide_name": "NAD1000",
+                "peptide_name_other": "",
+                "vendor_name": "Manual NAD Vendor",
+                "unit": "mg",
+                "vial_count": "1",
+                "mg_per_vial": "1000",
+                "added_at": "2026-06-14",
+                "notes": "manual NAD1000 smoke",
+            },
+        )
+        stock_totals = client.get("/stock-totals")
+        require(stock_totals, "Stock totals by product")
+        rt30 = stock_totals.split('data-stock-product="Retatrutide" data-stock-strength="30"', 1)[1].split("</article>", 1)[0]
+        if "<strong>5</strong>" not in rt30 or "<strong>150 mg</strong>" not in rt30 or "RT30" not in rt30:
+            raise AssertionError(f"RT30 lots were not combined into one 5-vial, 150-mg stock total: {rt30}")
+        nad1000 = stock_totals.split("NAD1000 · 1,000 mg/vial", 1)[1].split("</article>", 1)[0]
+        if "<strong>4</strong>" not in nad1000 or "<strong>4,000 mg</strong>" not in nad1000 or "NJ1000" not in nad1000 or "Manual entry" not in nad1000:
+            raise AssertionError(f"NJ1000 and manual NAD1000 lots were not combined into one product-strength total: {nad1000}")
 
         client.post(
             "/lots",
