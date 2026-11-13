@@ -444,6 +444,50 @@ button.text {
   border-bottom: 1px solid var(--line);
 }
 
+.pull-confirm-panel,
+.settings-panel {
+  max-width: 560px;
+}
+
+.pull-confirm-product {
+  margin-top: 16px;
+  font-size: 22px;
+  font-weight: 900;
+}
+
+.pull-confirm-panel > .meta {
+  margin-top: 6px;
+}
+
+.pull-confirm-form,
+.settings-pin-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 20px;
+}
+
+.pull-confirm-form .button-row {
+  margin-top: 0;
+}
+
+.settings-pin-form button,
+.pull-confirm-form .pull-action {
+  min-height: 54px;
+  font-size: 17px;
+}
+
+.inline-pin-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pin-input {
+  width: 88px;
+  min-height: 42px;
+  text-align: center;
+}
+
 button.pull-action {
   width: 100%;
   min-height: 58px;
@@ -741,6 +785,10 @@ button.pull-action {
 
   .user-chip {
     text-align: left;
+  }
+
+  .inline-pin-form {
+    flex-wrap: wrap;
   }
 
   .version-chip {

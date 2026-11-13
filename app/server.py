@@ -23,7 +23,7 @@ from app.supplier_codes import SUPPLIER_CODES, supplier_lookup
 
 
 APP_NAME = "Peptide Inventory"
-APP_VERSION = "v1.10"
+APP_VERSION = "v1.11"
 ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = ROOT / "static"
 DB_PATH = Path(os.environ.get("INVENTORY_DB", ROOT / "data" / "app.db"))
@@ -114,6 +114,18 @@ def verify_password(password: str, stored: str) -> bool:
         return False
 
 
+def hash_secret(value: str) -> str:
+    salt = secrets.token_hex(16)
+    iterations = 260_000
+    digest = hashlib.pbkdf2_hmac("sha256", value.encode(), salt.encode(), iterations)
+    return f"{iterations}${salt}${digest.hex()}"
+
+
+def inventory_setting(conn: sqlite3.Connection, key: str) -> str | None:
+    row = one(conn, "SELECT setting_value FROM inventory_settings WHERE setting_key = ?", (key,))
+    return str(row["setting_value"]) if row else None
+
+
 def init_db() -> None:
     with db() as conn:
         conn.executescript(
@@ -158,6 +170,12 @@ def init_db() -> None:
               notes TEXT,
               created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
               created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS inventory_settings (
+              setting_key TEXT PRIMARY KEY,
+              setting_value TEXT NOT NULL,
+              updated_at TEXT NOT NULL
             );
             """
         )
@@ -682,6 +700,7 @@ def layout(ctx: RequestContext, title: str, body: str, active: str = "/") -> byt
           {nav_item("/stock-totals", "Stock totals", active)}
           {nav_item("/one-k", "1K foot view", active)}
           {nav_item("/log", "Log", active)}
+          {nav_item("/settings", "Settings", active)}
         </nav>
         {flash}
         {error}
@@ -821,8 +840,9 @@ def render_inventory(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
           </div>
           <p class="meta">{h(row['notes'])}</p>
           <div class="button-row">
-            <form method="post" action="/lots/use" onsubmit="return confirm('Mark one vial from this lot as used/reconstituted?');">
+            <form method="post" action="/lots/use" class="inline-pin-form" onsubmit="return confirm('Mark one vial from this lot as used/reconstituted?');">
               <input type="hidden" name="lot_id" value="{row['id']}">
+              <input class="pin-input" type="password" name="pull_pin" inputmode="numeric" pattern="[0-9]{{4,8}}" minlength="4" maxlength="8" autocomplete="off" aria-label="Pull PIN" placeholder="PIN" required>
               <button class="secondary" type="submit">Mark 1 vial used</button>
             </form>
             <form method="post" action="/lots/restore">
@@ -1026,6 +1046,8 @@ def render_stock_totals(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
 def render_pull_vial(ctx: RequestContext, conn: sqlite3.Connection, pulled_lot_id: int | None = None) -> bytes:
     stock_rows = combined_stock_rows(conn)
     total_vials = sum(row["remaining_vials"] for row in stock_rows)
+    pin_is_set = inventory_setting(conn, "pull_pin_hash") is not None
+    pin_notice = "" if pin_is_set else '<div class="flash error">Set a PIN before pulling a vial. <a href="/settings">Set pull PIN</a>.</div>'
     undo_panel = ""
     if pulled_lot_id is not None:
         lot = one(conn, "SELECT peptide_name FROM inventory_lots WHERE id = ?", (pulled_lot_id,))
@@ -1050,18 +1072,19 @@ def render_pull_vial(ctx: RequestContext, conn: sqlite3.Connection, pulled_lot_i
             <div class="metric"><span>Vials available</span><strong>{fmt_num(row['remaining_vials'])}</strong></div>
             <div class="metric"><span>Total contents</span><strong>{fmt_amount(row['remaining_mg'], row['unit'])}</strong></div>
           </div>
-          <form method="post" action="/pull/use" onsubmit="return confirm('Pull one vial from this product? This records the pull and updates on-hand stock.');">
+          {f'''<form method="post" action="/pull/confirm">
             <input type="hidden" name="peptide_name" value="{h(row['name'])}">
             <input type="hidden" name="unit" value="{h(row['unit'])}">
             <input type="hidden" name="mg_per_vial" value="{h(row['mg_per_vial'])}">
             <button class="pull-action" type="submit">Pull 1 vial</button>
-          </form>
+          </form>''' if pin_is_set else '<a class="button pull-action" href="/settings">Set a PIN to pull vials</a>'}
         </article>
         """
         for row in stock_rows
     ) or '<div class="empty">No vials are currently available to pull.</div>'
     body = f"""
     {undo_panel}
+    {pin_notice}
     <section class="panel pull-hero">
       <div><p class="eyebrow">Physical stock</p><h2>{fmt_num(total_vials)} vials available</h2><p class="meta">Choose a product to pull one vial. The oldest available lot is used first.</p></div>
       <a class="button secondary" href="/stock-totals">View totals</a>
@@ -1069,6 +1092,64 @@ def render_pull_vial(ctx: RequestContext, conn: sqlite3.Connection, pulled_lot_i
     <section class="pull-grid">{cards}</section>
     """
     return layout(ctx, "Pull a vial", body, "/pull")
+
+
+def render_pull_confirmation(ctx: RequestContext, row: dict[str, Any], pin_is_set: bool) -> bytes:
+    if pin_is_set:
+        action = f"""
+        <form class="pull-confirm-form" method="post" action="/pull/use">
+          <input type="hidden" name="peptide_name" value="{h(row['name'])}">
+          <input type="hidden" name="unit" value="{h(row['unit'])}">
+          <input type="hidden" name="mg_per_vial" value="{h(row['mg_per_vial'])}">
+          <label>Pull PIN
+            <input type="password" name="pull_pin" inputmode="numeric" pattern="[0-9]{{4,8}}" minlength="4" maxlength="8" autocomplete="off" required autofocus>
+          </label>
+          <div class="button-row">
+            <a class="button secondary" href="/pull">Cancel</a>
+            <button class="pull-action" type="submit">Confirm vial pull</button>
+          </div>
+        </form>
+        """
+    else:
+        action = '<div class="flash error">Set a pull PIN in Settings before removing vials. <a href="/settings">Open PIN settings</a>.</div>'
+    body = f"""
+    <section class="panel pull-confirm-panel">
+      <p class="eyebrow">Confirm inventory change</p>
+      <h2>Pull one vial?</h2>
+      <p class="pull-confirm-product">{h(row['display_name'])}</p>
+      <p class="meta">{fmt_num(row['remaining_vials'])} vials currently available · oldest available lot will be used.</p>
+      {action}
+    </section>
+    """
+    return layout(ctx, "Confirm vial pull", body, "/pull")
+
+
+def render_settings(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
+    pin_is_set = inventory_setting(conn, "pull_pin_hash") is not None
+    current_field = """
+    <label>Current PIN or admin account password
+      <input type="password" name="current_credential" autocomplete="current-password" required>
+    </label>
+    """ if pin_is_set else ""
+    status = "PIN is enabled. Enter the current PIN or admin account password to change it." if pin_is_set else "No pull PIN is set. Choose one to enable protected vial pulls."
+    body = f"""
+    <section class="panel settings-panel">
+      <p class="eyebrow">Pull protection</p>
+      <h2>Pull PIN</h2>
+      <p class="meta">{h(status)} PINs must be 4-8 digits. The PIN is stored as a salted hash and is not recoverable. This adds a confirmation step on the shared device; it does not replace account login.</p>
+      <form class="settings-pin-form" method="post" action="/settings/pin">
+        {current_field}
+        <label>New PIN
+          <input type="password" name="new_pin" inputmode="numeric" pattern="[0-9]{{4,8}}" minlength="4" maxlength="8" autocomplete="new-password" required>
+        </label>
+        <label>Confirm new PIN
+          <input type="password" name="confirm_pin" inputmode="numeric" pattern="[0-9]{{4,8}}" minlength="4" maxlength="8" autocomplete="new-password" required>
+        </label>
+        <button type="submit">Save pull PIN</button>
+      </form>
+    </section>
+    """
+    return layout(ctx, "Settings", body, "/settings")
 
 
 def render_one_k_view(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
@@ -1175,7 +1256,7 @@ class App(BaseHTTPRequestHandler):
 
     def do_HEAD(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
-        self.send_response(HTTPStatus.OK if parsed.path in {"/", "/pull", "/inventory", "/vials", "/stock-totals", "/one-k", "/log", "/login", "/healthz"} else HTTPStatus.NOT_FOUND)
+        self.send_response(HTTPStatus.OK if parsed.path in {"/", "/pull", "/inventory", "/vials", "/stock-totals", "/one-k", "/log", "/settings", "/login", "/healthz"} else HTTPStatus.NOT_FOUND)
         self.end_headers()
 
     def do_GET(self) -> None:
@@ -1210,6 +1291,8 @@ class App(BaseHTTPRequestHandler):
                 pulled_raw = urllib.parse.parse_qs(parsed.query).get("pulled", [""])[0]
                 pulled_lot_id = int(pulled_raw) if pulled_raw.isdigit() else None
                 return self.html(render_pull_vial(ctx, conn, pulled_lot_id))
+            if parsed.path == "/settings":
+                return self.html(render_settings(ctx, conn))
             if parsed.path == "/inventory":
                 return self.html(render_inventory(ctx, conn))
             if parsed.path == "/vials":
@@ -1235,13 +1318,50 @@ class App(BaseHTTPRequestHandler):
         if ctx.user["role"] != "admin":
             raise PermissionError("Admin access required.")
         with db() as conn:
+            if parsed.path == "/settings/pin":
+                current_hash = inventory_setting(conn, "pull_pin_hash")
+                if current_hash:
+                    credential = data.get("current_credential", "")
+                    admin = one(conn, "SELECT password_hash FROM users WHERE id = ? AND role = 'admin'", (ctx.user["id"],))
+                    valid_pin = verify_password(credential, current_hash)
+                    valid_account_password = bool(admin and verify_password(credential, admin["password_hash"]))
+                    if not valid_pin and not valid_account_password:
+                        raise ValueError("Current PIN or admin account password is incorrect.")
+                new_pin = data.get("new_pin", "")
+                if not re.fullmatch(r"\d{4,8}", new_pin):
+                    raise ValueError("Pull PIN must be 4-8 digits.")
+                if new_pin != data.get("confirm_pin", ""):
+                    raise ValueError("New PIN entries do not match.")
+                conn.execute(
+                    "INSERT INTO inventory_settings (setting_key, setting_value, updated_at) VALUES ('pull_pin_hash', ?, ?) ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value, updated_at = excluded.updated_at",
+                    (hash_secret(new_pin), now_iso()),
+                )
+                return self.redirect(with_flash("/settings", "Pull PIN saved"))
             if parsed.path == "/lots":
                 self.add_lot(conn, ctx.user["id"], data)
                 return self.redirect(with_flash("/inventory", "Inventory added"))
             if parsed.path == "/lots/use":
+                self.require_pull_pin(conn, data.get("pull_pin", ""))
                 self.mark_lot_vial(conn, ctx.user["id"], int(data["lot_id"]), 1)
                 return self.redirect(with_flash("/inventory", "Vial marked used"))
+            if parsed.path == "/pull/confirm":
+                peptide_name = data.get("peptide_name", "").strip()
+                unit = normalize_unit(data.get("unit", "mg"))
+                mg_per_vial = safe_number(data.get("mg_per_vial", ""), "Strength per vial")
+                row = next(
+                    (
+                        stock for stock in combined_stock_rows(conn)
+                        if stock["name"].casefold() == peptide_name.casefold()
+                        and stock["unit"] == unit
+                        and abs(stock["mg_per_vial"] - mg_per_vial) < 0.000001
+                    ),
+                    None,
+                )
+                if not row:
+                    raise ValueError("No available vial remains for this product and strength. Refresh and try again.")
+                return self.html(render_pull_confirmation(ctx, row, inventory_setting(conn, "pull_pin_hash") is not None))
             if parsed.path == "/pull/use":
+                self.require_pull_pin(conn, data.get("pull_pin", ""))
                 lot_id = self.mark_product_vial(
                     conn,
                     ctx.user["id"],
@@ -1448,6 +1568,13 @@ class App(BaseHTTPRequestHandler):
         lot_id = int(lot["id"])
         self.mark_lot_vial(conn, user_id, lot_id, 1)
         return lot_id
+
+    def require_pull_pin(self, conn: sqlite3.Connection, pin: str) -> None:
+        stored_hash = inventory_setting(conn, "pull_pin_hash")
+        if not stored_hash:
+            raise ValueError("No pull PIN is set. Set one in Settings before removing vials.")
+        if not verify_password(pin, stored_hash):
+            raise ValueError("Incorrect pull PIN. No inventory was changed.")
 
     def delete_lot(self, conn: sqlite3.Connection, user_id: int, lot_id: int) -> None:
         lot = one(

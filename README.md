@@ -18,6 +18,7 @@ This app uses the same SQLite database as Peptide Power Assistant. It reads shar
 - New peptides are inserted into the shared `peptides` table so they appear in Peptide Power Assistant dropdowns.
 - Mark individual vials as used/reconstituted when they leave physical stock.
 - Pull Vial view summarizes available stock, confirms one-vial pulls, takes from the oldest available lot, and offers an immediate undo.
+- Configure a 4-8 digit pull PIN in Settings; the server requires it for vial-use actions while the tablet stays signed in.
 - Inventory Log tab shows timestamped audit events for lots, vial use/restores, deletes, and adjustments.
 - Vial View tab visually shows each vial currently on hand, grouped by peptide with a distinct high-contrast color palette.
 - Stock Totals tab combines lots by product name and vial strength, showing total vials and total contents for each product-strength group.
@@ -44,6 +45,7 @@ The app creates its own tables:
 inventory_lots
 inventory_adjustments
 inventory_events
+inventory_settings
 ```
 
 ## Supplier Codes
@@ -111,7 +113,7 @@ That means both apps use:
 Current image tag:
 
 ```text
-ghcr.io/skrems/peptide-inventory:v1.10
+ghcr.io/skrems/peptide-inventory:v1.11
 ```
 
 Use explicit version tags on ZimaOS custom apps. Do not rely on `latest`.
@@ -139,7 +141,7 @@ git push origin <version>
 
 ```text
 Docker image: ghcr.io/skrems/peptide-inventory
-Tag: v1.10
+Tag: v1.11
 Port: 8081 -> 8081
 Volume: /DATA/AppData/peptide-power-assistant/data -> /data
 ```

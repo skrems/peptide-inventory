@@ -177,7 +177,7 @@ def main() -> int:
         require(login, "Log")
         require(login, "Pull vial")
         require(login, "Stock totals")
-        require(login, "Version v1.10")
+        require(login, "Version v1.11")
 
         inventory = client.get("/inventory")
         require(inventory, "Add inventory")
@@ -255,14 +255,71 @@ def main() -> int:
 
         with sqlite3.connect(db_path) as conn:
             lot_id = conn.execute("SELECT id FROM inventory_lots WHERE peptide_name = 'SS-31' ORDER BY id DESC LIMIT 1").fetchone()[0]
+        settings = client.get("/settings")
+        require(settings, "No pull PIN is set")
+        try:
+            client.post("/lots/use", {"lot_id": str(lot_id)})
+        except urllib.error.HTTPError as exc:
+            if exc.code != 400:
+                raise
+            require(exc.read().decode("utf-8"), "No pull PIN is set")
+        else:
+            raise AssertionError("a vial was marked used before a pull PIN was configured")
+        settings = client.post(
+            "/settings/pin",
+            {"new_pin": "2468", "confirm_pin": "2468"},
+        )
+        require(settings, "Pull PIN saved")
+        with sqlite3.connect(db_path) as conn:
+            stored_pin = conn.execute("SELECT setting_value FROM inventory_settings WHERE setting_key = 'pull_pin_hash'").fetchone()[0]
+            if stored_pin == "2468" or not stored_pin.startswith("260000$"):
+                raise AssertionError("pull PIN was not stored as a salted hash")
+        try:
+            client.post(
+                "/settings/pin",
+                {"current_credential": "0000", "new_pin": "1357", "confirm_pin": "1357"},
+            )
+        except urllib.error.HTTPError as exc:
+            if exc.code != 400:
+                raise
+            require(exc.read().decode("utf-8"), "Current PIN or admin account password is incorrect")
+        else:
+            raise AssertionError("pull PIN changed without verifying the current PIN")
+        settings = client.post(
+            "/settings/pin",
+            {"current_credential": "2468", "new_pin": "1357", "confirm_pin": "1357"},
+        )
+        require(settings, "Pull PIN saved")
+        settings = client.post(
+            "/settings/pin",
+            {"current_credential": ADMIN_PASSWORD, "new_pin": "8642", "confirm_pin": "8642"},
+        )
+        require(settings, "Pull PIN saved")
         pull = client.get("/pull")
         require(pull, "Pull a vial")
         require(pull, "3 vials available")
         require(pull, "Pull 1 vial")
         require(pull, "oldest available lot is used first")
+        confirm_page = client.post(
+            "/pull/confirm",
+            {"peptide_name": "SS-31", "unit": "mg", "mg_per_vial": "10"},
+        )
+        require(confirm_page, "Confirm vial pull")
+        require(confirm_page, 'name="pull_pin"')
+        try:
+            client.post(
+                "/pull/use",
+                {"peptide_name": "SS-31", "unit": "mg", "mg_per_vial": "10", "pull_pin": "1357"},
+            )
+        except urllib.error.HTTPError as exc:
+            if exc.code != 400:
+                raise
+            require(exc.read().decode("utf-8"), "Incorrect pull PIN")
+        else:
+            raise AssertionError("a vial was pulled with an incorrect PIN")
         pull_response = client.post(
             "/pull/use",
-            {"peptide_name": "SS-31", "unit": "mg", "mg_per_vial": "10"},
+            {"peptide_name": "SS-31", "unit": "mg", "mg_per_vial": "10", "pull_pin": "8642"},
         )
         require(pull_response, "Pull recorded: SS-31")
         require(pull_response, "Undo pull")
@@ -281,7 +338,7 @@ def main() -> int:
             restored = conn.execute("SELECT vials_used FROM inventory_lots WHERE id = ?", (lot_id,)).fetchone()[0]
             if restored != 0:
                 raise AssertionError("Undo Pull did not restore the vial")
-        client.post("/lots/use", {"lot_id": str(lot_id)})
+        client.post("/lots/use", {"lot_id": str(lot_id), "pull_pin": "8642"})
         home = client.get("/")
         require(home, "20 mg on hand")
         require(home, "2")

@@ -23,3 +23,7 @@ Physical vial views separate supplier-code and strength variants while dashboard
 ## Versioned ZimaOS Releases
 
 Production uses explicit GHCR `vX.Y` tags on `linux/amd64`. The application version, compose image, Git tag, documentation, and visible version badge move together.
+
+## Pull Confirmation PIN
+
+The shared-device vial-pull flow uses an inventory-specific 4-8 digit PIN while the admin session remains signed in. Store only a salted password hash in `inventory_settings`; enforce it server-side on every vial-use route, including the legacy Manage action. Changing the PIN requires the existing PIN or the signed-in admin's account password for recovery. The PIN is a convenience barrier on the physical device, not a replacement for account authentication.

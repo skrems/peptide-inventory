@@ -11,8 +11,8 @@ Peptide Inventory is an admin-only Python/SQLite companion app for Peptide Power
 - Local path: `/Users/skrems/Projects/peptide-inventory`
 - GitHub: `git@github.com:skrems/peptide-inventory.git`
 - Branch: `main`
-- Current release: `v1.10`
-- Image: `ghcr.io/skrems/peptide-inventory:v1.10`
+- Current release: `v1.11`
+- Image: `ghcr.io/skrems/peptide-inventory:v1.11`
 - ZimaOS app name: `peptide-inventory`
 - Browser URL: `http://<zimaboard-ip>:8081/`
 - Health check: `http://127.0.0.1:8081/healthz` from the ZimaBoard
@@ -39,6 +39,7 @@ Owned by Peptide Inventory:
 inventory_lots
 inventory_adjustments
 inventory_events
+inventory_settings
 ```
 
 Inventory lots support `mg` and `IU`, a free-text vendor, batch date, expiry date, quantity, strength, used-vial count, notes, and audit history. A peptide cannot mix measurement units.
@@ -55,6 +56,7 @@ Inventory lots support `mg` and `IU`, a free-text vendor, batch date, expiry dat
 - Vial View and 1K Foot View use an inventory-only 32-color high-contrast palette without altering shared peptide colors.
 - Stock Totals view combines current on-hand lots by product name and per-vial strength, showing vial count and total contents per product-strength group.
 - Pull Vial view is touch-friendly, confirms one-vial pulls, uses the oldest available lot, writes a normal vial-use event, and offers immediate undo.
+- Pull confirmation PIN is configured by an admin in Settings, stored as a salted hash, and required server-side for both Pull Vial and Manage vial-use actions. PIN changes require the existing PIN or the signed-in admin's account password for recovery.
 - `NJ1000` creates the distinct product `NAD1000`; lower-strength NAD products remain `NAD`.
 - The running release is visible beside the signed-in user.
 
@@ -86,6 +88,7 @@ The compose source is `/DATA/AppData/peptide-inventory/source/docker-compose.zim
 - `v1.8`: show blend component strengths and separate BB10/BB20 physical vial groups without splitting their shared dose-log forecasting history.
 - `v1.9`: add product-strength Stock Totals view and identify 1,000 mg NAD as `NAD1000`.
 - `v1.10`: add touch-friendly Pull Vial workflow with confirmation, oldest-lot selection, and immediate undo.
+- `v1.11`: require a hashed PIN to confirm vial pulls while keeping the shared-device admin session signed in.
 
 ## Next Candidates
 

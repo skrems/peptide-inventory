@@ -11,7 +11,7 @@
 - This is a dependency-light Python web app in `app/server.py` with static assets in `static/`.
 - It is an admin-only companion to Peptide Power Assistant.
 - Both apps share the SQLite database mounted from `/DATA/AppData/peptide-power-assistant/data/app.db`.
-- Shared tables are `users`, `peptides`, and `dose_logs`; inventory-owned tables are `inventory_lots`, `inventory_adjustments`, and `inventory_events`.
+- Shared tables are `users`, `peptides`, and `dose_logs`; inventory-owned tables are `inventory_lots`, `inventory_adjustments`, `inventory_events`, and `inventory_settings`.
 - Supplier-code mappings live in `app/supplier_codes.py`.
 
 ## Verification
