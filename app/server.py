@@ -23,7 +23,7 @@ from app.supplier_codes import SUPPLIER_CODES, supplier_lookup
 
 
 APP_NAME = "Peptide Inventory"
-APP_VERSION = "v1.9"
+APP_VERSION = "v1.10"
 ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = ROOT / "static"
 DB_PATH = Path(os.environ.get("INVENTORY_DB", ROOT / "data" / "app.db"))
@@ -332,6 +332,31 @@ def physical_stock_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     for row in rows:
         row["color"] = colors[row["display_name"]]
     return sorted(rows, key=lambda row: (row["name"].casefold(), row["mg_per_vial"], row["code"]))
+
+
+def combined_stock_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str, float, tuple[tuple[str, float], ...]], dict[str, Any]] = {}
+    for stock in physical_stock_rows(conn):
+        components = tuple(sorted(stock["components"]))
+        key = (stock["name"].casefold(), stock["unit"], stock["mg_per_vial"], components)
+        row = grouped.setdefault(
+            key,
+            {**stock, "remaining_vials": 0.0, "remaining_mg": 0.0, "codes": set(), "has_manual_lots": False},
+        )
+        row["remaining_vials"] += stock["remaining_vials"]
+        row["remaining_mg"] += stock["remaining_mg"]
+        if stock["code"]:
+            row["codes"].add(stock["code"])
+        else:
+            row["has_manual_lots"] = True
+    rows = sorted(grouped.values(), key=lambda row: (row["name"].casefold(), row["mg_per_vial"], row["unit"]))
+    for row in rows:
+        row["display_name"] = f"{row['name']} · {fmt_amount(row['mg_per_vial'], row['unit'])}/vial"
+        sources = sorted(row["codes"])
+        if row["has_manual_lots"]:
+            sources.append("Manual entry")
+        row["source_codes"] = ", ".join(sources) or "Manual entry"
+    return rows
 
 
 def inventory_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
@@ -651,6 +676,7 @@ def layout(ctx: RequestContext, title: str, body: str, active: str = "/") -> byt
         <div class="notice">Inventory helper only. Confirm logs, vial labels, and dose units before making supply decisions.</div>
         <nav class="tabs">
           {nav_item("/", "Dashboard", active)}
+          {nav_item("/pull", "Pull vial", active)}
           {nav_item("/inventory", "Manage", active)}
           {nav_item("/vials", "Vial view", active)}
           {nav_item("/stock-totals", "Stock totals", active)}
@@ -950,36 +976,7 @@ def render_vial_view(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
 
 
 def render_stock_totals(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
-    grouped: dict[tuple[str, str, float, tuple[tuple[str, float], ...]], dict[str, Any]] = {}
-    for stock in physical_stock_rows(conn):
-        components = tuple(sorted(stock["components"]))
-        key = (stock["name"].casefold(), stock["unit"], stock["mg_per_vial"], components)
-        row = grouped.setdefault(
-            key,
-            {
-                **stock,
-                "remaining_vials": 0.0,
-                "remaining_mg": 0.0,
-                "codes": set(),
-                "has_manual_lots": False,
-            },
-        )
-        row["remaining_vials"] += stock["remaining_vials"]
-        row["remaining_mg"] += stock["remaining_mg"]
-        if stock["code"]:
-            row["codes"].add(stock["code"])
-        else:
-            row["has_manual_lots"] = True
-    stock_rows = sorted(
-        grouped.values(),
-        key=lambda row: (row["name"].casefold(), row["mg_per_vial"], row["unit"]),
-    )
-    for row in stock_rows:
-        row["display_name"] = f"{row['name']} · {fmt_amount(row['mg_per_vial'], row['unit'])}/vial"
-        sources = sorted(row["codes"])
-        if row["has_manual_lots"]:
-            sources.append("Manual entry")
-        row["source_codes"] = ", ".join(sources) or "Manual entry"
+    stock_rows = combined_stock_rows(conn)
     total_vials = sum(row["remaining_vials"] for row in stock_rows)
     totals_by_unit = {
         unit: sum(row["remaining_mg"] for row in stock_rows if row["unit"] == unit)
@@ -1024,6 +1021,54 @@ def render_stock_totals(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
     </section>
     """
     return layout(ctx, "Stock Totals", body, "/stock-totals")
+
+
+def render_pull_vial(ctx: RequestContext, conn: sqlite3.Connection, pulled_lot_id: int | None = None) -> bytes:
+    stock_rows = combined_stock_rows(conn)
+    total_vials = sum(row["remaining_vials"] for row in stock_rows)
+    undo_panel = ""
+    if pulled_lot_id is not None:
+        lot = one(conn, "SELECT peptide_name FROM inventory_lots WHERE id = ?", (pulled_lot_id,))
+        if lot:
+            undo_panel = f"""
+            <section class="pull-success">
+              <div><strong>Pull recorded: {h(lot['peptide_name'])}</strong><span>Inventory and the audit log are updated.</span></div>
+              <form method="post" action="/pull/undo">
+                <input type="hidden" name="lot_id" value="{pulled_lot_id}">
+                <button class="secondary" type="submit">Undo pull</button>
+              </form>
+            </section>
+            """
+    cards = "".join(
+        f"""
+        <article class="pull-card" data-stock-product="{h(row['name'])}" data-stock-strength="{fmt_num(row['mg_per_vial'])}">
+          <div class="pull-card-title">
+            <span class="color-swatch" style="--swatch-color: {h(row['color'])}" aria-hidden="true"></span>
+            <div><h2>{h(row['display_name'])}</h2><p class="meta">Source: {h(row['source_codes'])}</p></div>
+          </div>
+          <div class="pull-card-metrics">
+            <div class="metric"><span>Vials available</span><strong>{fmt_num(row['remaining_vials'])}</strong></div>
+            <div class="metric"><span>Total contents</span><strong>{fmt_amount(row['remaining_mg'], row['unit'])}</strong></div>
+          </div>
+          <form method="post" action="/pull/use" onsubmit="return confirm('Pull one vial from this product? This records the pull and updates on-hand stock.');">
+            <input type="hidden" name="peptide_name" value="{h(row['name'])}">
+            <input type="hidden" name="unit" value="{h(row['unit'])}">
+            <input type="hidden" name="mg_per_vial" value="{h(row['mg_per_vial'])}">
+            <button class="pull-action" type="submit">Pull 1 vial</button>
+          </form>
+        </article>
+        """
+        for row in stock_rows
+    ) or '<div class="empty">No vials are currently available to pull.</div>'
+    body = f"""
+    {undo_panel}
+    <section class="panel pull-hero">
+      <div><p class="eyebrow">Physical stock</p><h2>{fmt_num(total_vials)} vials available</h2><p class="meta">Choose a product to pull one vial. The oldest available lot is used first.</p></div>
+      <a class="button secondary" href="/stock-totals">View totals</a>
+    </section>
+    <section class="pull-grid">{cards}</section>
+    """
+    return layout(ctx, "Pull a vial", body, "/pull")
 
 
 def render_one_k_view(ctx: RequestContext, conn: sqlite3.Connection) -> bytes:
@@ -1130,7 +1175,7 @@ class App(BaseHTTPRequestHandler):
 
     def do_HEAD(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
-        self.send_response(HTTPStatus.OK if parsed.path in {"/", "/inventory", "/vials", "/stock-totals", "/one-k", "/log", "/login", "/healthz"} else HTTPStatus.NOT_FOUND)
+        self.send_response(HTTPStatus.OK if parsed.path in {"/", "/pull", "/inventory", "/vials", "/stock-totals", "/one-k", "/log", "/login", "/healthz"} else HTTPStatus.NOT_FOUND)
         self.end_headers()
 
     def do_GET(self) -> None:
@@ -1161,6 +1206,10 @@ class App(BaseHTTPRequestHandler):
         with db() as conn:
             if parsed.path == "/":
                 return self.html(render_home(ctx, conn))
+            if parsed.path == "/pull":
+                pulled_raw = urllib.parse.parse_qs(parsed.query).get("pulled", [""])[0]
+                pulled_lot_id = int(pulled_raw) if pulled_raw.isdigit() else None
+                return self.html(render_pull_vial(ctx, conn, pulled_lot_id))
             if parsed.path == "/inventory":
                 return self.html(render_inventory(ctx, conn))
             if parsed.path == "/vials":
@@ -1192,6 +1241,18 @@ class App(BaseHTTPRequestHandler):
             if parsed.path == "/lots/use":
                 self.mark_lot_vial(conn, ctx.user["id"], int(data["lot_id"]), 1)
                 return self.redirect(with_flash("/inventory", "Vial marked used"))
+            if parsed.path == "/pull/use":
+                lot_id = self.mark_product_vial(
+                    conn,
+                    ctx.user["id"],
+                    data["peptide_name"],
+                    normalize_unit(data["unit"]),
+                    safe_number(data["mg_per_vial"], "Strength per vial"),
+                )
+                return self.redirect(with_flash(f"/pull?pulled={lot_id}", "Vial pull recorded"))
+            if parsed.path == "/pull/undo":
+                self.mark_lot_vial(conn, ctx.user["id"], int(data["lot_id"]), -1)
+                return self.redirect(with_flash("/pull", "Pull undone; vial returned to on-hand stock"))
             if parsed.path == "/lots/restore":
                 self.mark_lot_vial(conn, ctx.user["id"], int(data["lot_id"]), -1)
                 return self.redirect(with_flash("/inventory", "Vial restored"))
@@ -1359,6 +1420,34 @@ class App(BaseHTTPRequestHandler):
             reason,
             lot["notes"] or "",
         )
+
+    def mark_product_vial(
+        self,
+        conn: sqlite3.Connection,
+        user_id: int,
+        peptide_name: str,
+        unit: str,
+        mg_per_vial: float,
+    ) -> int:
+        lot = one(
+            conn,
+            """
+            SELECT id
+            FROM inventory_lots
+            WHERE lower(peptide_name) = lower(?)
+              AND lower(unit) = lower(?)
+              AND ABS(mg_per_vial - ?) < 0.000001
+              AND vial_count > COALESCE(vials_used, 0)
+            ORDER BY added_at ASC, id ASC
+            LIMIT 1
+            """,
+            (peptide_name.strip(), normalize_unit(unit), mg_per_vial),
+        )
+        if not lot:
+            raise ValueError("No available vial remains for this product and strength. Refresh the page and try again.")
+        lot_id = int(lot["id"])
+        self.mark_lot_vial(conn, user_id, lot_id, 1)
+        return lot_id
 
     def delete_lot(self, conn: sqlite3.Connection, user_id: int, lot_id: int) -> None:
         lot = one(

@@ -175,8 +175,9 @@ def main() -> int:
         require(login, "SS-31")
         require(login, "tracked peptides")
         require(login, "Log")
+        require(login, "Pull vial")
         require(login, "Stock totals")
-        require(login, "Version v1.9")
+        require(login, "Version v1.10")
 
         inventory = client.get("/inventory")
         require(inventory, "Add inventory")
@@ -254,6 +255,32 @@ def main() -> int:
 
         with sqlite3.connect(db_path) as conn:
             lot_id = conn.execute("SELECT id FROM inventory_lots WHERE peptide_name = 'SS-31' ORDER BY id DESC LIMIT 1").fetchone()[0]
+        pull = client.get("/pull")
+        require(pull, "Pull a vial")
+        require(pull, "3 vials available")
+        require(pull, "Pull 1 vial")
+        require(pull, "oldest available lot is used first")
+        pull_response = client.post(
+            "/pull/use",
+            {"peptide_name": "SS-31", "unit": "mg", "mg_per_vial": "10"},
+        )
+        require(pull_response, "Pull recorded: SS-31")
+        require(pull_response, "Undo pull")
+        with sqlite3.connect(db_path) as conn:
+            used_after_pull = conn.execute("SELECT vials_used FROM inventory_lots WHERE id = ?", (lot_id,)).fetchone()[0]
+            if used_after_pull != 1:
+                raise AssertionError("Pull Vial did not mark one vial used")
+            fifo_event = conn.execute("SELECT lot_id FROM inventory_events WHERE event_type = 'vial_used' ORDER BY id DESC LIMIT 1").fetchone()[0]
+            if fifo_event != lot_id:
+                raise AssertionError("Pull Vial did not record the lot selected by oldest-first order")
+        undo_response = client.post("/pull/undo", {"lot_id": str(lot_id)})
+        require(undo_response, "Pull undone; vial returned to on-hand stock")
+        home = client.get("/")
+        require(home, "30 mg on hand")
+        with sqlite3.connect(db_path) as conn:
+            restored = conn.execute("SELECT vials_used FROM inventory_lots WHERE id = ?", (lot_id,)).fetchone()[0]
+            if restored != 0:
+                raise AssertionError("Undo Pull did not restore the vial")
         client.post("/lots/use", {"lot_id": str(lot_id)})
         home = client.get("/")
         require(home, "20 mg on hand")
@@ -268,7 +295,7 @@ def main() -> int:
         require(log, "Vial marked used/reconstituted")
         with sqlite3.connect(db_path) as conn:
             event_count = conn.execute("SELECT COUNT(*) FROM inventory_events WHERE event_type = 'vial_used'").fetchone()[0]
-            if event_count != 1:
+            if event_count != 2:
                 raise AssertionError("vial use event was not recorded")
 
         client.post("/lots/restore", {"lot_id": str(lot_id)})

@@ -396,6 +396,83 @@ button.text {
   margin: 5px 0 0;
 }
 
+.pull-hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+.pull-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: 12px;
+}
+
+.pull-card {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 18px;
+  box-shadow: 0 1px 2px rgba(12, 31, 28, .04);
+}
+
+.pull-card-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.pull-card-title h2 {
+  overflow-wrap: anywhere;
+}
+
+.pull-card-title .meta {
+  margin-top: 5px;
+}
+
+.pull-card-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+button.pull-action {
+  width: 100%;
+  min-height: 58px;
+  font-size: 18px;
+}
+
+.pull-success {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid #b9d7c4;
+  border-radius: 8px;
+  background: #edf8f0;
+  color: #15552b;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+}
+
+.pull-success div {
+  display: grid;
+  gap: 3px;
+}
+
+.pull-success button {
+  min-height: 48px;
+  white-space: nowrap;
+}
+
 .vial-group {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -641,7 +718,9 @@ button.text {
   .item-title,
   .hero-panel,
   .vial-hero,
-  .one-k-hero {
+  .one-k-hero,
+  .pull-hero,
+  .pull-success {
     display: grid;
   }
 
